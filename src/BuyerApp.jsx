@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, getToken, setToken } from './api.js'
+import { readSapFile } from './readSap.js'
 import {
   PLANTS,
   SORTS,
@@ -512,13 +513,23 @@ function BulkBar({ count, onApply, onClear, busy }) {
 
 // ---------- upload ----------
 
+const plural = (count, word) => `${count.toLocaleString('en-IN')} ${word}${count === 1 ? '' : 's'}`
+
+function uploadSummary(result) {
+  if (result.report !== 'MB51') return `${result.report} · ${plural(result.rows, 'row')}`
+  const parts = [`${plural(result.rows, 'receipt')} matched lines on the board`]
+  if (result.held) parts.push(`${plural(result.held, 'receipt')} held until ME2L adds those POs`)
+  if (result.skipped) parts.push(`${plural(result.skipped, 'older receipt')} for POs not on the board skipped`)
+  return `MB51 · ${parts.join(' · ')}`
+}
+
 function UploadTab({ data, replaceAll, onUnauthorized }) {
   const { toast, confirm } = useFeedback()
   const [plant, setPlant] = useState('')
   const [drag, setDrag] = useState(false)
   const [queue, setQueue] = useState([])
   const inputRef = useRef(null)
-  const running = queue.some((item) => item.status === 'sending' || item.status === 'waiting')
+  const running = queue.some((item) => ['reading', 'sending', 'waiting'].includes(item.status))
 
   // Each source is { name, read() } so dropped files and the bundled samples share one path.
   const sendFiles = async (sources) => {
@@ -530,12 +541,21 @@ function UploadTab({ data, replaceAll, onUnauthorized }) {
     setQueue((current) => [...items, ...current.filter((item) => item.status === 'done' || item.status === 'error')].slice(0, 12))
     const update = (key, partial) => setQueue((current) => current.map((item) => (item.key === key ? { ...item, ...partial } : item)))
     for (const item of items) {
-      update(item.key, { status: 'sending' })
+      update(item.key, { status: 'reading' })
       try {
         const buffer = await item.read()
-        const result = await api.uploadBuffer(item.name, buffer, plant)
+        // Read the file here in the browser and send only the rows the board needs.
+        let parsed = null
+        try {
+          parsed = await readSapFile(buffer)
+        } catch {
+          parsed = undefined
+        }
+        if (parsed === null) throw new Error('This file does not look like ME5A, ME2L, or MB51. Export the list with column headings.')
+        update(item.key, { status: 'sending' })
+        const result = parsed ? await api.uploadParsed(item.name, parsed, plant) : await api.uploadBuffer(item.name, buffer, plant)
         replaceAll(result)
-        update(item.key, { status: 'done', message: `${result.report} · ${result.rows} row${result.rows === 1 ? '' : 's'}` })
+        update(item.key, { status: 'done', message: uploadSummary(result) })
       } catch (err) {
         if (err.status === 401) onUnauthorized()
         update(item.key, { status: 'error', message: err.message })
@@ -627,7 +647,7 @@ function UploadTab({ data, replaceAll, onUnauthorized }) {
               <li key={item.key} className={`q-${item.status}`}>
                 <Icon name={item.status === 'done' ? 'check' : item.status === 'error' ? 'alert' : 'file'} size={16} />
                 <span className="q-name">{item.name}</span>
-                <span className="q-msg">{item.status === 'sending' ? 'Reading…' : item.status === 'waiting' ? 'Waiting' : item.message}</span>
+                <span className="q-msg">{item.status === 'reading' ? 'Reading the file…' : item.status === 'sending' ? 'Saving…' : item.status === 'waiting' ? 'Waiting' : item.message}</span>
               </li>
             ))}
           </ul>
@@ -654,7 +674,7 @@ function UploadTab({ data, replaceAll, onUnauthorized }) {
                 <span className={`file-tag r-${upload.report}`}>{upload.report}</span>
                 <span className="file-name">
                   <strong>{upload.filename || upload.report}</strong>
-                  <small>{upload.rows} row{upload.rows === 1 ? '' : 's'} · {plantLabel(upload.plant) || 'No plant'} · {pretty(upload.at)} · {ago(upload.at)}</small>
+                  <small>{plural(upload.rows || 0, upload.report === 'MB51' ? 'receipt' : 'row')} · {plantLabel(upload.plant) || 'No plant'} · {pretty(upload.at)} · {ago(upload.at)}</small>
                 </span>
                 <button type="button" className="icon-btn" onClick={() => remove(upload)} aria-label={`Remove ${upload.filename || upload.report}`} title="Remove"><Icon name="trash" size={16} /></button>
               </li>

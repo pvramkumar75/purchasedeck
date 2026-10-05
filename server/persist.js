@@ -46,10 +46,11 @@ function supabaseHeaders(extra = {}) {
 }
 
 async function supabaseFetch(query, options = {}) {
+  const { timeout = 15000, ...rest } = options
   const response = await fetch(`${supabaseUrl()}/rest/v1/app_store${query}`, {
-    ...options,
-    headers: supabaseHeaders(options.headers),
-    signal: AbortSignal.timeout(10000),
+    ...rest,
+    headers: supabaseHeaders(rest.headers),
+    signal: AbortSignal.timeout(timeout),
   })
   if (!response.ok && response.status !== 409) {
     const body = await response.text().catch(() => '')
@@ -99,6 +100,74 @@ async function writeSupabase(text, version) {
   if (!rows.length) throw new StoreConflict('Someone else saved first.')
   memo = { text, version: next }
   return next
+}
+
+// ---------- uploaded file rows, kept outside the board ----------
+// A big MB51 can hold megabytes of rows. Keeping them in their own rows (Supabase)
+// or files (local) means everyday saves only rewrite the small board document.
+
+const recordsDir = () => path.join(path.dirname(storePath), 'records')
+const recordKey = (id) => `rec:${String(id).replace(/[^a-z0-9]/gi, '')}`
+const inList = (ids) => `in.(${ids.map((id) => `"${recordKey(id)}"`).join(',')})`
+
+export function keepsRecordsApart() {
+  return kind() === 'supabase' || kind() === 'file'
+}
+
+export async function putRecords(id, records) {
+  const text = JSON.stringify(records)
+  if (kind() === 'supabase') {
+    await supabaseFetch('', {
+      method: 'POST',
+      headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: `{"id":"${recordKey(id)}","version":1,"updated_at":"${new Date().toISOString()}","doc":${text}}`,
+      timeout: 25000,
+    })
+    return
+  }
+  fs.mkdirSync(recordsDir(), { recursive: true })
+  fs.writeFileSync(path.join(recordsDir(), `${recordKey(id).slice(4)}.json`), text)
+}
+
+export async function getRecords(ids) {
+  const out = {}
+  if (!ids.length) return out
+  if (kind() === 'supabase') {
+    const rows = await (await supabaseFetch(`?id=${encodeURIComponent(inList(ids))}&select=id,doc`, { timeout: 25000 })).json()
+    for (const row of rows) out[row.id.slice(4)] = row.doc
+    return out
+  }
+  for (const id of ids) {
+    const file = path.join(recordsDir(), `${recordKey(id).slice(4)}.json`)
+    if (fs.existsSync(file)) out[id] = JSON.parse(fs.readFileSync(file, 'utf8'))
+  }
+  return out
+}
+
+export async function dropRecords(ids) {
+  if (!ids?.length) return
+  try {
+    if (kind() === 'supabase') {
+      await supabaseFetch(`?id=${encodeURIComponent(inList(ids))}`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } })
+      return
+    }
+    for (const id of ids) fs.rmSync(path.join(recordsDir(), `${recordKey(id).slice(4)}.json`), { force: true })
+  } catch (error) {
+    // Leftover rows only take space; the board no longer points at them.
+    console.error('Old file rows could not be removed.', error)
+  }
+}
+
+// Older boards kept each file's rows inline; move them out once.
+async function moveRecordsOut(store) {
+  const inline = store.uploads.filter((upload) => Array.isArray(upload.records))
+  if (!inline.length || !keepsRecordsApart()) return false
+  for (const upload of inline) {
+    await putRecords(upload.id, upload.records)
+    delete upload.records
+    upload.stored = true
+  }
+  return true
 }
 
 // ---------- Vercel Blob (old store, kept for importing) ----------
@@ -204,9 +273,10 @@ async function load(depth = 0) {
     return load(depth + 1)
   }
   const store = parse(raw)
-  // Older stores are upgraded (hashed sessions, generated passwords) on first read.
-  // A failed upgrade write is fine: the next successful save stores it anyway.
-  if (store.needsSave && depth === 0) {
+  // Older stores are upgraded (hashed sessions, generated passwords, file rows moved
+  // out) on first read. A failed upgrade write is fine: the next save stores it anyway.
+  const moved = depth === 0 ? await moveRecordsOut(store) : false
+  if ((store.needsSave || moved) && depth === 0) {
     try {
       await save(store, raw.version)
       return load(depth + 1)

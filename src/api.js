@@ -117,6 +117,18 @@ export const api = {
   removeUpload: (id) => post('/api/upload-remove', { id }),
   clearUploads: (plant) => post('/api/upload-clear', { plant }),
   markSpecial: (body, plantId) => post('/api/special', body, plantId ? { buyer: false, plantId } : { buyer: true }),
+  // Rows the browser already read from the file: compact, compressed JSON.
+  uploadParsed: async (filename, parsed, plant) => {
+    const bytes = new TextEncoder().encode(JSON.stringify({ report: parsed.report, records: parsed.records }))
+    const packed = await gzip(bytes).catch(() => null)
+    const base64 = toBase64(packed || bytes)
+    if (base64.length > MAX_BODY) {
+      const error = new Error(`${filename} has too many rows to send at once (${parsed.records.length.toLocaleString('en-IN')}). Export a shorter date range and add the parts one by one.`)
+      error.status = 413
+      throw error
+    }
+    return post('/api/upload', { filename, plant, parsed: base64, encoding: packed ? 'gzip' : undefined })
+  },
   uploadBuffer: async (filename, buffer, plant) => {
     const bytes = new Uint8Array(buffer)
     // Spreadsheets are already compressed; text exports shrink a lot with gzip.

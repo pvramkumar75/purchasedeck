@@ -1,5 +1,6 @@
 import crypto from 'crypto'
 import * as xlsx from 'xlsx'
+import { RECEIPT_MOVES, REVERSAL_MOVES, asId, asItem, parseWorkbook as parseBytes, text, toISO } from '../shared/parse.js'
 
 export const PLANTS = [
   { id: 'TPL', label: 'TPL' },
@@ -41,256 +42,12 @@ const DEFAULT_PLANTS = {
   '1300': 'TCL-JDCL',
 }
 
-export function norm(value) {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-}
-
-export function asId(value) {
-  if (value == null || value === '') return ''
-  return String(value).trim()
-}
-
-// SAP prints item numbers as 10 or 00010 depending on the report and export format.
-export function asItem(value) {
-  const id = asId(value)
-  return /^\d+$/.test(id) ? id.replace(/^0+(?=\d)/, '') : id
-}
-
-export function num(value) {
-  if (value == null || value === '') return null
-  if (typeof value === 'number' && Number.isFinite(value)) return value
-  const parsed = Number(String(value).replace(/,/g, '').replace(/\s/g, ''))
-  return Number.isFinite(parsed) ? parsed : null
-}
-
-function text(value) {
-  if (value == null) return ''
-  return String(value).trim()
-}
-
-export function toISO(value) {
-  if (value == null || value === '') return null
-  if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    const y = value.getFullYear()
-    const m = String(value.getMonth() + 1).padStart(2, '0')
-    const d = String(value.getDate()).padStart(2, '0')
-    return `${y}-${m}-${d}`
-  }
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    const epoch = Date.UTC(1899, 11, 30)
-    const dt = new Date(epoch + Math.round(value) * 86400000)
-    return dt.toISOString().slice(0, 10)
-  }
-  const raw = String(value).trim()
-  const build = (y, m, d) => {
-    const month = Number(m)
-    const day = Number(d)
-    if (month < 1 || month > 12 || day < 1 || day > 31) return null
-    return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-  }
-  let match = raw.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/)
-  if (match) return build(match[1], match[2], match[3])
-  match = raw.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})/)
-  if (match) return build(match[3], match[2], match[1])
-  return null
-}
-
-function val(row, keys) {
-  for (const key of keys) {
-    if (row[key] != null && String(row[key]).trim() !== '') return row[key]
-  }
-  const rowKeys = Object.keys(row)
-  const sorted = [...keys].sort((a, b) => b.length - a.length)
-  for (const key of sorted) {
-    if (key.length < 6) continue
-    const hit = rowKeys.find((candidate) => candidate.includes(key))
-    if (hit && row[hit] != null && String(row[hit]).trim() !== '') return row[hit]
-  }
-  return ''
-}
-
-function detect(headers) {
-  const joined = headers.join(' | ')
-  if (joined.includes('movement type') || joined.includes('material document')) return 'MB51'
-  if (joined.includes('still to be delivered') || joined.includes('order quantity')) return 'ME2L'
-  if (joined.includes('purchase requisition') || joined.includes('requisitioner')) return 'ME5A'
-  return null
-}
-
-function mapMe5a(row) {
-  const indentNo = asId(val(row, ['purchase requisition', 'purch req', 'pr number']))
-  const material = asId(val(row, ['material']))
-  if (!indentNo && !material) return null
-  return {
-    indentNo,
-    indentItem: asItem(val(row, ['item'])) || '0',
-    material,
-    shortText: text(val(row, ['short text', 'material description', 'description'])),
-    quantity: num(val(row, ['quantity'])),
-    unit: text(val(row, ['unit of measure', 'base unit of measure', 'uom', 'unit'])),
-    indentDelivery: toISO(val(row, ['delivery date', 'deliv date'])),
-    plant: asId(val(row, ['plant'])),
-    requisitioner: text(val(row, ['requisitioner'])),
-    requisitionDate: toISO(val(row, ['requisition date', 'req date'])),
-    poNumber: asId(val(row, ['purchasing document', 'purchase order'])),
-    vendor: asId(val(row, ['vendor', 'fixed vendor'])),
-    vendorName: text(val(row, ['fixed vendor name', 'vendor name', 'name 1'])),
-  }
-}
-
-function mapMe2l(row) {
-  const poNumber = asId(val(row, ['purchasing document', 'purchase order']))
-  const indentNo = asId(val(row, ['purchase requisition']))
-  const material = asId(val(row, ['material']))
-  if (!poNumber && !indentNo && !material) return null
-  const indentItem = asItem(val(row, ['item of requisition', 'requisition item']))
-  return {
-    vendor: asId(val(row, ['vendor'])),
-    vendorName: text(val(row, ['name 1', 'vendor name', 'supplier name'])),
-    poNumber,
-    poItem: asItem(val(row, ['item'])) || '0',
-    material,
-    shortText: text(val(row, ['short text', 'material description'])),
-    orderQty: num(val(row, ['order quantity'])),
-    openQty: num(val(row, ['quantity still to be delivered', 'still to be delivered'])),
-    netPrice: num(val(row, ['net price', 'net order price'])),
-    plant: asId(val(row, ['plant'])),
-    poDate: toISO(val(row, ['document date'])),
-    poDelivery: toISO(val(row, ['delivery date'])),
-    indentNo,
-    indentItem: indentItem || (indentNo ? '0' : ''),
-  }
-}
-
-function mapMb51(row) {
-  const matDoc = asId(val(row, ['material document']))
-  const material = asId(val(row, ['material']))
-  if (!matDoc && !material) return null
-  return {
-    matDoc,
-    material,
-    plant: asId(val(row, ['plant'])),
-    movement: asId(val(row, ['movement type'])),
-    postingDate: toISO(val(row, ['posting date'])),
-    quantity: num(val(row, ['quantity'])),
-    poNumber: asId(val(row, ['purchase order', 'purchasing document'])),
-    poItem: asItem(val(row, ['item'])),
-    vendor: asId(val(row, ['vendor'])),
-  }
-}
-
-export function parseMatrix(matrix) {
-  if (!matrix?.length) return { report: null, records: [], headers: [] }
-  let headerIdx = 0
-  for (let i = 0; i < Math.min(matrix.length, 30); i += 1) {
-    const joined = matrix[i].map((cell) => norm(cell)).join(' | ')
-    if (
-      joined.includes('movement type') ||
-      joined.includes('still to be delivered') ||
-      joined.includes('order quantity') ||
-      joined.includes('purchase requisition') ||
-      joined.includes('requisitioner') ||
-      joined.includes('purchasing document')
-    ) {
-      headerIdx = i
-      break
-    }
-  }
-  const headers = matrix[headerIdx].map((cell) => norm(cell))
-  const report = detect(headers)
-  const records = []
-  for (let r = headerIdx + 1; r < matrix.length; r += 1) {
-    const obj = {}
-    let any = false
-    headers.forEach((header, index) => {
-      if (!header) return
-      const value = matrix[r][index]
-      if (value != null && String(value).trim() !== '') any = true
-      if (obj[header] == null || obj[header] === '') obj[header] = value
-    })
-    if (!any || !report) continue
-    const rec = report === 'ME5A' ? mapMe5a(obj) : report === 'ME2L' ? mapMe2l(obj) : mapMb51(obj)
-    if (rec) records.push(rec)
-  }
-  return { report, records, headers }
-}
-
-function pickDelimiter(source) {
-  // SAP "Spreadsheet" exports are tab separated and often start with title lines,
-  // so look at the first few lines rather than only the first.
-  const sample = source.split(/\r?\n/, 12).join('\n')
-  const counts = [
-    ['\t', (sample.match(/\t/g) || []).length],
-    [';', (sample.match(/;/g) || []).length],
-    [',', (sample.match(/,/g) || []).length],
-  ]
-  if (counts[0][1] > 0) return '\t'
-  return counts[1][1] > counts[2][1] ? ';' : ','
-}
-
-export function decodeText(buffer) {
-  if (buffer[0] === 0xff && buffer[1] === 0xfe) return buffer.subarray(2).toString('utf16le')
-  if (buffer[0] === 0xfe && buffer[1] === 0xff) {
-    const body = buffer.subarray(2)
-    const swapped = Buffer.from(body.subarray(0, body.length - (body.length % 2)))
-    swapped.swap16()
-    return swapped.toString('utf16le')
-  }
-  return buffer.toString('utf8').replace(/^\uFEFF/, '')
-}
-
-function parseDelimited(text) {
-  const source = text.replace(/^\uFEFF/, '')
-  const delimiter = pickDelimiter(source)
-  const rows = []
-  let row = []
-  let cell = ''
-  let quoted = false
-  for (let i = 0; i < source.length; i += 1) {
-    const char = source[i]
-    if (quoted) {
-      if (char === '"') {
-        if (source[i + 1] === '"') {
-          cell += '"'
-          i += 1
-        } else quoted = false
-      } else cell += char
-    } else if (char === '"') quoted = true
-    else if (char === delimiter) {
-      row.push(cell)
-      cell = ''
-    } else if (char === '\n') {
-      row.push(cell)
-      rows.push(row)
-      row = []
-      cell = ''
-    } else if (char !== '\r') cell += char
-  }
-  if (cell.length || row.length) {
-    row.push(cell)
-    rows.push(row)
-  }
-  return rows
-}
+export { asId, asItem, decodeText, norm, num, parseMatrix, toISO } from '../shared/parse.js'
 
 export function parseWorkbook(buffer) {
-  const zipped = buffer[0] === 0x50 && buffer[1] === 0x4b
-  const legacyExcel = buffer[0] === 0xd0 && buffer[1] === 0xcf
-  if (!zipped && !legacyExcel) {
-    const parsed = parseMatrix(parseDelimited(decodeText(buffer)))
-    if (parsed.report) return parsed
-  }
-  const workbook = xlsx.read(buffer, { type: 'buffer', cellDates: false })
-  for (const name of workbook.SheetNames) {
-    const matrix = xlsx.utils.sheet_to_json(workbook.Sheets[name], { header: 1, raw: true, defval: '' })
-    const parsed = parseMatrix(matrix)
-    if (parsed.report && parsed.records.length) return parsed
-  }
-  return { report: null, records: [], headers: [] }
+  return parseBytes(buffer, xlsx)
 }
+
 
 function blankLine(id) {
   return {
@@ -305,15 +62,6 @@ function blankLine(id) {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   }
-}
-
-function ensure(store, id) {
-  let line = store.lines.find((item) => item.id === id)
-  if (!line) {
-    line = blankLine(id)
-    store.lines.push(line)
-  }
-  return line
 }
 
 function fill(line, fields) {
@@ -334,10 +82,45 @@ function sourceOf(line) {
   return line.source || line.companyOverride || ''
 }
 
-const RECEIPT_MOVES = new Set(['101', '103', '105'])
-const REVERSAL_MOVES = new Set(['102', '104', '106', '122'])
+const poKey = (po, item) => `${po}|${item || ''}`
+// MB51 receipts for POs not on the board yet are held this long for a later ME2L.
+const PENDING_DAYS = 120
+const PENDING_MAX = 20000
+
+function isReplayable(upload) {
+  return Array.isArray(upload.records) || Boolean(upload.stored)
+}
+
+function recordsOf(upload, recordsById) {
+  return Array.isArray(upload.records) ? upload.records : recordsById?.[upload.id] || null
+}
+
+// Oldest first. The log is kept newest-first, so reverse before the (stable) sort
+// to keep files uploaded in the same millisecond in their real order.
+function replayableFiles(store, plant) {
+  return [...store.uploads]
+    .reverse()
+    .filter((upload) => upload.plant === plant && isReplayable(upload))
+    .sort((a, b) => String(a.at).localeCompare(String(b.at)))
+}
+
+// Files whose rows are kept outside the board and are needed to rebuild a plant.
+export function storedFileIds(store, plant) {
+  return replayableFiles(store, plant).filter((upload) => !Array.isArray(upload.records)).map((upload) => upload.id)
+}
+
+// Files that adding one more upload for this plant will fold into the baseline.
+export function filesToFold(store, plant) {
+  const files = replayableFiles(store, plant)
+  const extra = files.length + 1 - KEEP_FILES_PER_PLANT
+  return extra > 0 ? files.slice(0, extra).filter((upload) => !Array.isArray(upload.records)).map((upload) => upload.id) : []
+}
 
 export function applyRecords(store, report, records, company, options = {}) {
+  const stats = options.stats || {}
+  stats.matched = 0
+  stats.held = 0
+  stats.skipped = 0
   const tag = (line) => {
     if (company && COMPANIES.includes(company)) {
       line.companyOverride = company
@@ -349,14 +132,48 @@ export function applyRecords(store, report, records, company, options = {}) {
     store.lines = store.lines.filter((line) => !line.sample)
     store.vendorNames = {}
   }
+  store.pendingReceipts ||= {}
+
+  // Lookup tables so large files stay fast (no scanning the board per row).
+  const byId = new Map(store.lines.map((line) => [line.id, line]))
+  const byPo = new Map()
+  const byIndentMaterial = new Map()
+  const index = (line) => {
+    if (line.poNumber && !byPo.has(poKey(line.poNumber, line.poItem))) byPo.set(poKey(line.poNumber, line.poItem), line)
+    if (line.indentNo && line.material && !byIndentMaterial.has(`${line.indentNo}|${line.material}`)) {
+      byIndentMaterial.set(`${line.indentNo}|${line.material}`, line)
+    }
+  }
+  store.lines.forEach(index)
+  const removed = new Set()
+  const ensure = (id) => {
+    let line = byId.get(id)
+    if (!line) {
+      line = blankLine(id)
+      store.lines.push(line)
+      byId.set(id, line)
+    }
+    return line
+  }
+  // A PO line that just appeared picks up receipts MB51 delivered before it existed.
+  const claimPending = (line) => {
+    if (!line.poNumber) return
+    const key = poKey(line.poNumber, line.poItem)
+    const held = store.pendingReceipts[key]
+    if (!held) return
+    line.receipts = { ...held.receipts, ...line.receipts }
+    delete store.pendingReceipts[key]
+  }
+
   let count = 0
   if (report === 'ME5A') {
     for (const record of records) {
       if (!record.indentNo && !record.material) continue
       const id = record.indentNo ? `IND-${record.indentNo}-${record.indentItem || '0'}` : `MAT-${record.material}`
-      const line = ensure(store, id)
+      const line = ensure(id)
       fill(line, record)
       tag(line)
+      index(line)
       count += 1
     }
   }
@@ -366,108 +183,120 @@ export function applyRecords(store, report, records, company, options = {}) {
       let id = record.indentNo
         ? `IND-${record.indentNo}-${record.indentItem || '0'}`
         : `PO-${record.poNumber}-${record.poItem || '0'}`
-      if (record.indentNo && (!record.indentItem || record.indentItem === '0')) {
-        const match = store.lines.find((line) => line.indentNo === record.indentNo && record.material && line.material === record.material)
-        if (match) id = match.id
+      if (record.indentNo && (!record.indentItem || record.indentItem === '0') && record.material) {
+        const match = byIndentMaterial.get(`${record.indentNo}|${record.material}`)
+        if (match && !removed.has(match)) id = match.id
       }
-      const existing = record.poNumber && store.lines.find(
-        (line) => line.poNumber === record.poNumber && String(line.poItem || '') === String(record.poItem || '') && line.id !== id,
-      )
+      const found = record.poNumber ? byPo.get(poKey(record.poNumber, record.poItem)) : null
+      const existing = found && found.id !== id && !removed.has(found) ? found : null
       if (existing && record.indentNo) {
-        const indentLine = store.lines.find((line) => line.id === id)
-        if (!indentLine) existing.id = id
-        else {
+        const indentLine = byId.get(id)
+        if (!indentLine) {
+          byId.delete(existing.id)
+          existing.id = id
+          byId.set(id, existing)
+        } else {
           indentLine.receipts = { ...existing.receipts, ...indentLine.receipts }
           indentLine.override = { ...existing.override, ...indentLine.override }
-          store.lines = store.lines.filter((line) => line !== existing)
+          removed.add(existing)
+          byId.delete(existing.id)
+          byPo.set(poKey(record.poNumber, record.poItem), indentLine)
         }
       }
-      const line = ensure(store, id)
+      const line = ensure(id)
       fill(line, record)
       tag(line)
+      index(line)
+      claimPending(line)
       if (record.vendor && record.vendorName) store.vendorNames[record.vendor] = record.vendorName
       count += 1
     }
   }
   if (report === 'MB51') {
+    const cutoff = new Date(Date.now() - PENDING_DAYS * 86400000).toISOString().slice(0, 10)
+    let pendingCount = Object.keys(store.pendingReceipts).length
     for (const record of records) {
       if (!record.matDoc) continue
       const movement = String(record.movement || '')
       const reversal = REVERSAL_MOVES.has(movement)
       const receipt = RECEIPT_MOVES.has(movement)
-      // Issues, transfers and other movements are not receipts; skip them before a line is created.
+      // Issues, transfers and other movements are not receipts.
       if (!reversal && !receipt) continue
-      let line = store.lines.find(
-        (item) => record.poNumber && item.poNumber === record.poNumber && String(item.poItem || '') === String(record.poItem || ''),
-      )
-      if (!line) {
-        const id = record.poNumber ? `PO-${record.poNumber}-${record.poItem || '0'}` : `MAT-${record.material}-${record.matDoc}`
-        line = ensure(store, id)
-        fill(line, {
-          material: record.material,
-          plant: record.plant,
-          poNumber: record.poNumber,
-          poItem: record.poItem,
-          vendor: record.vendor,
-        })
-      }
       const magnitude = Math.abs(Number(record.quantity || 0))
-      line.receipts[record.matDoc] = {
-        qty: reversal ? -magnitude : magnitude,
-        date: record.postingDate,
-        movement,
+      const entry = { qty: reversal ? -magnitude : magnitude, date: record.postingDate, movement }
+      const line = record.poNumber ? byPo.get(poKey(record.poNumber, record.poItem)) : null
+      if (!line || removed.has(line)) {
+        // Only lines already on the board get receipts; a full MB51 must not flood
+        // the board with old POs. Recent ones wait for an ME2L that adds the PO.
+        const key = poKey(record.poNumber, record.poItem)
+        const recent = !record.postingDate || record.postingDate >= cutoff
+        if (record.poNumber && recent && (store.pendingReceipts[key] || pendingCount < PENDING_MAX)) {
+          if (!store.pendingReceipts[key]) {
+            store.pendingReceipts[key] = { plant: company || '', receipts: {} }
+            pendingCount += 1
+          }
+          store.pendingReceipts[key].receipts[record.matDoc] = entry
+          stats.held += 1
+        } else stats.skipped += 1
+        continue
       }
+      line.receipts[record.matDoc] = entry
       if (!line.vendorName && record.vendor && store.vendorNames[record.vendor]) {
         line.vendorName = store.vendorNames[record.vendor]
       }
       line.sample = false
       line.updatedAt = new Date().toISOString()
       tag(line)
+      stats.matched += 1
       count += 1
     }
   }
+  if (removed.size) store.lines = store.lines.filter((line) => !removed.has(line))
   if (options.log !== false) {
-    store.uploads.unshift({
-      id: crypto.randomBytes(8).toString('hex'),
+    const upload = {
+      id: options.id || crypto.randomBytes(8).toString('hex'),
       report,
       rows: count,
       plant: company || '',
       filename: options.filename || '',
       at: new Date().toISOString(),
-      records,
-    })
-    foldOldUploads(store, company)
+      ...(report === 'MB51' ? { held: stats.held, skipped: stats.skipped } : {}),
+    }
+    // Rows live outside the board when the storage can hold them separately.
+    if (options.stored) upload.stored = true
+    else upload.records = records
+    store.uploads.unshift(upload)
+    stats.folded = foldOldUploads(store, company, options.recordsById)
   }
   return count
 }
 
-// Oldest first. The log is kept newest-first, so reverse before the (stable) sort
-// to keep files uploaded in the same millisecond in their real order.
-function replayableFiles(store, plant) {
-  return [...store.uploads]
-    .reverse()
-    .filter((upload) => upload.plant === plant && Array.isArray(upload.records))
-    .sort((a, b) => String(a.at).localeCompare(String(b.at)))
-}
-
 // Only the newest files per plant keep their rows. Older files are folded, in upload
 // order, into a per-plant baseline so removing a recent file never drops their lines.
-function foldOldUploads(store, plant) {
+// Returns the ids of folded files whose rows were stored separately.
+function foldOldUploads(store, plant, recordsById) {
   store.baselines ||= {}
+  const folded = []
   const files = replayableFiles(store, plant)
   const extra = files.length - KEEP_FILES_PER_PLANT
   if (extra > 0 && plant) {
-    const base = { lines: store.baselines[plant]?.lines || [], vendorNames: store.vendorNames, uploads: [] }
-    for (const file of files.slice(0, extra)) applyRecords(base, file.report, file.records, plant, { log: false })
-    store.baselines[plant] = { lines: base.lines.map(baselineCopy), at: new Date().toISOString() }
-    const folded = new Set(files.slice(0, extra).map((file) => file.id))
-    store.uploads = store.uploads.filter((upload) => !folded.has(upload.id))
+    const oldest = files.slice(0, extra).filter((file) => recordsOf(file, recordsById))
+    if (oldest.length) {
+      const previous = store.baselines[plant] || {}
+      const base = { lines: previous.lines || [], pendingReceipts: { ...(previous.pending || {}) }, vendorNames: store.vendorNames, uploads: [] }
+      for (const file of oldest) applyRecords(base, file.report, recordsOf(file, recordsById), plant, { log: false })
+      store.baselines[plant] = { lines: base.lines.map(baselineCopy), pending: base.pendingReceipts, at: new Date().toISOString() }
+      const gone = new Set(oldest.map((file) => file.id))
+      store.uploads = store.uploads.filter((upload) => !gone.has(upload.id))
+      for (const file of oldest) if (file.stored) folded.push(file.id)
+    }
   }
-  const legacy = store.uploads.filter((upload) => !Array.isArray(upload.records))
+  const legacy = store.uploads.filter((upload) => !isReplayable(upload))
   if (legacy.length > 30) {
     const drop = new Set(legacy.slice(30).map((upload) => upload.id))
     store.uploads = store.uploads.filter((upload) => !drop.has(upload.id))
   }
+  return folded
 }
 
 function baselineCopy(line) {
@@ -486,16 +315,21 @@ function keptEdits(line) {
   }
 }
 
-function rebuildPlant(store, plant) {
+function rebuildPlant(store, plant, recordsById) {
+  const files = replayableFiles(store, plant)
+  // Never rebuild from a partial set of files: that would silently drop lines.
+  const missing = files.filter((file) => !recordsOf(file, recordsById))
+  if (missing.length) throw new Error(`Rows for ${missing.length} file(s) could not be loaded; nothing was changed.`)
   const edits = new Map()
   for (const line of store.lines) {
     if (!line.manual && sourceOf(line) === plant) edits.set(line.id, keptEdits(line))
   }
   store.lines = store.lines.filter((line) => line.manual || sourceOf(line) !== plant)
-  const baseline = store.baselines?.[plant]?.lines || []
-  store.lines.push(...baseline.map((line) => JSON.parse(JSON.stringify(line))))
-  const files = replayableFiles(store, plant)
-  for (const file of files) applyRecords(store, file.report, file.records, plant, { log: false })
+  store.pendingReceipts = Object.fromEntries(Object.entries(store.pendingReceipts || {}).filter(([, held]) => held.plant !== plant))
+  const baseline = store.baselines?.[plant] || {}
+  store.lines.push(...(baseline.lines || []).map((line) => JSON.parse(JSON.stringify(line))))
+  Object.assign(store.pendingReceipts, JSON.parse(JSON.stringify(baseline.pending || {})))
+  for (const file of files) applyRecords(store, file.report, recordsOf(file, recordsById), plant, { log: false })
   for (const line of store.lines) {
     const saved = edits.get(line.id)
     if (!saved) continue
@@ -507,6 +341,7 @@ function rebuildPlant(store, plant) {
     if (saved.unitOverride) line.unitOverride = saved.unitOverride
   }
 }
+
 
 export function lineLabel(line) {
   const name = line.shortText || line.material || 'Material'
@@ -549,29 +384,33 @@ export function notifyChangedSpecials(store, before) {
   }
 }
 
-export function removeUpload(store, uploadId) {
+// `recordsById` holds the rows of files stored outside the board (see storedFileIds).
+export function removeUpload(store, uploadId, recordsById) {
   const upload = store.uploads.find((item) => item.id === uploadId)
   if (!upload) return null
   const plant = upload.plant
-  const hadRows = Array.isArray(upload.records)
+  const hadRows = isReplayable(upload)
   if (hadRows) {
     store.uploads = store.uploads.filter((item) => item.id !== uploadId)
   } else if (plant) {
-    store.uploads = store.uploads.filter((item) => item.plant !== plant || (item.id !== uploadId && Array.isArray(item.records)))
+    store.uploads = store.uploads.filter((item) => item.plant !== plant || (item.id !== uploadId && isReplayable(item)))
   } else {
     store.uploads = store.uploads.filter((item) => item.id !== uploadId)
   }
-  if (plant && COMPANIES.includes(plant)) rebuildPlant(store, plant)
+  if (plant && COMPANIES.includes(plant)) rebuildPlant(store, plant, recordsById)
   return { ...upload, records: undefined, rebuilt: hadRows }
 }
 
+// Returns the ids of the plant's separately stored files, which can then be deleted.
 export function clearPlantUploads(store, plant) {
-  if (!COMPANIES.includes(plant)) return false
+  if (!COMPANIES.includes(plant)) return null
+  const dropped = store.uploads.filter((item) => item.plant === plant && item.stored).map((item) => item.id)
   store.uploads = store.uploads.filter((item) => item.plant !== plant)
   if (store.baselines) delete store.baselines[plant]
-  rebuildPlant(store, plant)
-  return true
+  rebuildPlant(store, plant, {})
+  return dropped
 }
+
 
 export function receivedQty(line) {
   return Object.values(line.receipts || {}).reduce((sum, row) => sum + Number(row.qty || 0), 0)
@@ -774,6 +613,7 @@ export function normalizeStore(store) {
   store.baselines ||= {}
   store.notices ||= []
   store.loginFailures ||= {}
+  store.pendingReceipts ||= {}
   const now = new Date().toISOString()
   const markForSave = () => Object.defineProperty(store, 'needsSave', { value: true, enumerable: false, configurable: true })
   // Sessions are kept as hashes with a start time. Older stores held raw tokens,

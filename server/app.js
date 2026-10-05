@@ -17,6 +17,7 @@ import {
   companiesForPlant,
   companyOf,
   decorate,
+  filesToFold,
   hashToken,
   isPublishedPassword,
   lineLabel,
@@ -28,8 +29,10 @@ import {
   removeUpload,
   specialSnapshot,
   stepPatch,
+  storedFileIds,
 } from './logic.js'
-import { HttpError, mutate, readBlob, readVersioned, storageKind } from './persist.js'
+import { HttpError, dropRecords, getRecords, keepsRecordsApart, mutate, putRecords, readBlob, readVersioned, storageKind } from './persist.js'
+import { cleanRecords, compactRecords } from '../shared/parse.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const distDir = path.join(__dirname, '..', 'dist')
@@ -198,12 +201,15 @@ const route = (handler) => async (req, res) => {
 }
 
 // A buyer change: checks the session, applies the change, saves, returns the fresh board.
-const buyerChange = (change) => route(async (req, res) => {
+// `after` runs once the save has gone through (for example to delete old file rows).
+const buyerChange = (change, after) => route(async (req, res) => {
   const { store, result, version } = await mutate(async (current) => {
     requireBuyer(current, req)
     return change(current, req)
   })
-  res.json({ ...payload(store, { buyer: true }, version), ...(result || {}) })
+  if (after) await after(result || {})
+  const { cleanup, ...shown } = result || {}
+  res.json({ ...payload(store, { buyer: true }, version), ...shown })
 })
 
 app.get('/api/health', route(async (_req, res) => {
@@ -319,8 +325,8 @@ app.post('/api/plant-passwords', buyerChange((store, req) => {
   return { changed }
 }))
 
-app.post('/api/upload', buyerChange((store, req) => {
-  let buffer = Buffer.from(req.body?.base64 || '', 'base64')
+function unpack(req) {
+  let buffer = Buffer.from(req.body?.base64 || req.body?.parsed || '', 'base64')
   if (req.body?.encoding === 'gzip') {
     try {
       buffer = zlib.gunzipSync(buffer)
@@ -329,8 +335,25 @@ app.post('/api/upload', buyerChange((store, req) => {
     }
   }
   if (!buffer.length) throw new HttpError(400, 'The file was empty.')
-  const plant = req.body?.plant
-  if (!COMPANIES.includes(plant)) throw new HttpError(400, 'Choose the plant before uploading the SAP file.')
+  return buffer
+}
+
+// Reads the upload before any saving starts, so a retried save never re-reads it.
+// Browsers send rows they already read from the file (`parsed`); the raw file
+// (`base64`) is the fallback for anything the browser could not read.
+function readUpload(req) {
+  const buffer = unpack(req)
+  if (req.body?.parsed) {
+    let parsed
+    try {
+      parsed = JSON.parse(buffer.toString('utf8'))
+    } catch {
+      throw new HttpError(400, 'The file arrived damaged. Try adding it again.')
+    }
+    const records = cleanRecords(parsed?.report, parsed?.records)
+    if (!records) throw new HttpError(400, 'This file does not look like ME5A, ME2L, or MB51.')
+    return { report: parsed.report, records }
+  }
   let parsed
   try {
     parsed = parseWorkbook(buffer)
@@ -340,12 +363,38 @@ app.post('/api/upload', buyerChange((store, req) => {
   if (!parsed.report) {
     throw new HttpError(400, 'This file does not look like ME5A, ME2L, or MB51. Export the list with column headings.')
   }
+  return { report: parsed.report, records: parsed.records }
+}
+
+app.post('/api/upload', route(async (req, res) => {
+  requireBuyer((await readVersioned()).store, req)
+  const plant = req.body?.plant
+  if (!COMPANIES.includes(plant)) throw new HttpError(400, 'Choose the plant before uploading the SAP file.')
+  const { report, records: all } = readUpload(req)
+  const records = compactRecords(report, all)
   const filename = String(req.body?.filename || '').slice(0, 160)
-  const before = new Map(store.lines.filter((line) => line.special).map((line) => [line.id, specialSnapshot(line)]))
-  const rows = applyRecords(store, parsed.report, parsed.records, plant, { filename })
-  notifyChangedSpecials(store, before)
-  return { report: parsed.report, rows, filename }
+  const id = crypto.randomBytes(8).toString('hex')
+  const apart = keepsRecordsApart()
+  if (apart) await putRecords(id, records)
+  try {
+    const { store, result, version } = await mutate(async (current) => {
+      requireBuyer(current, req)
+      const foldIds = apart ? filesToFold(current, plant) : []
+      const recordsById = foldIds.length ? await getRecords(foldIds) : {}
+      const before = new Map(current.lines.filter((line) => line.special).map((line) => [line.id, specialSnapshot(line)]))
+      const stats = {}
+      const rows = applyRecords(current, report, records, plant, { filename, id, stored: apart, recordsById, stats })
+      notifyChangedSpecials(current, before)
+      return { report, rows, filename, held: stats.held || 0, skipped: stats.skipped || 0, read: all.length, folded: stats.folded || [] }
+    })
+    await dropRecords(result.folded)
+    res.json({ ...payload(store, { buyer: true }, version), ...result, folded: undefined })
+  } catch (error) {
+    if (apart) await dropRecords([id])
+    throw error
+  }
 }))
+
 
 app.post('/api/lines', buyerChange((store, req) => {
   const body = req.body || {}
@@ -459,16 +508,32 @@ app.post('/api/special', route(async (req, res) => {
   res.json(payload(store, result.viewer.buyer ? { buyer: true } : { plant: result.viewer.plant }, version))
 }))
 
-app.post('/api/upload-remove', buyerChange((store, req) => {
-  const removed = removeUpload(store, String(req.body?.id || ''))
-  if (!removed) throw new HttpError(404, 'That upload is no longer in the list.')
-  return { removed: removed.report, removedFile: removed.filename || '', plant: removed.plant, rebuilt: Boolean(removed.rebuilt) }
-}))
+app.post('/api/upload-remove', buyerChange(async (store, req) => {
+  const id = String(req.body?.id || '')
+  const upload = store.uploads.find((item) => item.id === id)
+  if (!upload) throw new HttpError(404, 'That upload is no longer in the list.')
+  // Rebuilding the plant replays its remaining files, so load their rows first.
+  const recordsById = upload.plant ? await getRecords(storedFileIds(store, upload.plant)) : {}
+  let removed
+  try {
+    removed = removeUpload(store, id, recordsById)
+  } catch (error) {
+    throw new HttpError(503, `${error.message} Try again in a moment.`)
+  }
+  return {
+    removed: removed.report,
+    removedFile: removed.filename || '',
+    plant: removed.plant,
+    rebuilt: Boolean(removed.rebuilt),
+    cleanup: upload.stored ? [id] : [],
+  }
+}, (result) => dropRecords(result.cleanup)))
 
 app.post('/api/upload-clear', buyerChange((store, req) => {
-  if (!clearPlantUploads(store, req.body?.plant)) throw new HttpError(400, 'Choose the plant whose files should be removed.')
-  return { cleared: req.body.plant }
-}))
+  const dropped = clearPlantUploads(store, req.body?.plant)
+  if (!dropped) throw new HttpError(400, 'Choose the plant whose files should be removed.')
+  return { cleared: req.body.plant, cleanup: dropped }
+}, (result) => dropRecords(result.cleanup)))
 
 app.put('/api/plant-map', buyerChange((store, req) => {
   const next = {}

@@ -547,7 +547,7 @@ button.stack-seg:hover { filter: brightness(1.12); }
 .q-done .icon { color: var(--c-received); }
 .q-error { background: color-mix(in srgb, var(--danger) 9%, var(--surface)) !important; }
 .q-error .icon, .q-error .q-msg { color: var(--danger); }
-.q-sending .icon { animation: pulse 1s ease-in-out infinite; color: var(--brand); }
+.q-sending .icon, .q-reading .icon { animation: pulse 1s ease-in-out infinite; color: var(--brand); }
 .files { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
 .files li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 8px 6px; border-bottom: 1px solid var(--line); }
 .files li:last-child { border-bottom: 0; }
