@@ -57,7 +57,7 @@ function editorState(line) {
   }
 }
 
-function MilestoneEditor({ line, onSaved, onDeleted, onUnauthorized, onBack }) {
+function MilestoneEditor({ line, board, onSaved, onDeleted, onUnauthorized, onBack }) {
   const [form, setForm] = useState(() => editorState(line))
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
@@ -95,8 +95,8 @@ function MilestoneEditor({ line, onSaved, onDeleted, onUnauthorized, onBack }) {
         paymentStatus: form.paymentStatus,
         paymentDate: form.paymentDate,
       }
-      const result = await api.saveLine(line.id, body)
-      onSaved(result.line)
+      const result = await api.saveLine(line.id, { ...body, board })
+      onSaved(result)
       setMessage('Saved')
     } catch (err) {
       if (err.status === 401) onUnauthorized()
@@ -110,7 +110,7 @@ function MilestoneEditor({ line, onSaved, onDeleted, onUnauthorized, onBack }) {
     if (!window.confirm(`Remove ${line.shortText} from the board?`)) return
     setBusy(true)
     try {
-      const result = await api.deleteLine(line.id)
+      const result = await api.deleteLine(line.id, (board || []).filter((item) => item.id !== line.id))
       onDeleted(result)
     } catch (err) {
       if (err.status === 401) onUnauthorized()
@@ -142,10 +142,14 @@ function MilestoneEditor({ line, onSaved, onDeleted, onUnauthorized, onBack }) {
       </dl>
       <label className="field">
         Unit
-        <select value={form.company} onChange={(event) => patch({ company: event.target.value })}>
+        <select value={COMPANIES.includes(form.company) ? form.company : ''} onChange={(event) => patch({ company: event.target.value })}>
+          <option value="" disabled>Choose unit</option>
           {COMPANIES.map((name) => <option key={name}>{name}</option>)}
         </select>
       </label>
+      {!COMPANIES.includes(form.company) && (
+        <p className="hint">Plant {line.plant || 'is missing in the SAP file'}. Choose TPL, TCL-JDM, or TCL-JDCL before saving.</p>
+      )}
       {line.sapPoNumber ? (
         <p className="hint">PO {line.sapPoNumber} comes from SAP.</p>
       ) : (
@@ -491,7 +495,7 @@ function Desk({ onUnauthorized }) {
                         <h3>{line.shortText}</h3>
                         <PayBadge status={line.payment.status} />
                       </div>
-                      <p className="meta">{line.material} · {line.company} · Indent {line.indentNo || '—'} {line.poNumber ? `· PO ${line.poNumber}` : ''}</p>
+                      <p className="meta">{line.material} · {line.company === 'Unassigned' ? `Plant ${line.plant || '—'}` : line.company} · Indent {line.indentNo || '—'} {line.poNumber ? `· PO ${line.poNumber}` : ''}</p>
                       <MiniTrack stages={line.stages} statusLabel={line.statusLabel} />
                     </div>
                   </button>
@@ -501,9 +505,10 @@ function Desk({ onUnauthorized }) {
             {editing && (
               <MilestoneEditor
                 line={editing}
+                board={lines}
                 onBack={() => setEditId(null)}
                 onUnauthorized={onUnauthorized}
-                onSaved={(line) => setData((current) => ({ ...current, lines: current.lines.map((item) => item.id === line.id ? line : item) }))}
+                onSaved={(next) => replaceAll(next)}
                 onDeleted={(next) => { replaceAll(next); setEditId(null) }}
               />
             )}

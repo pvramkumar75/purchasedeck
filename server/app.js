@@ -9,41 +9,18 @@ import {
   applyEditor,
   applyRecords,
   asId,
-  createDemoStore,
   decorate,
-  normalizeStore,
+  lineFromView,
   num,
   parseWorkbook,
 } from './logic.js'
+import { readStore, writeStore } from './persist.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const dataDir = path.join(__dirname, '..', 'data')
-const storePath = process.env.VERCEL ? '/tmp/material-tracking-store.json' : path.join(dataDir, 'store.json')
 const distDir = path.join(__dirname, '..', 'dist')
 const PIN = process.env.BUYER_PIN || 'buyer123'
 
-function save(store) {
-  try {
-    fs.mkdirSync(path.dirname(storePath), { recursive: true })
-    const copy = { ...store, sessions: store.sessions.slice(-30) }
-    fs.writeFileSync(storePath, JSON.stringify(copy, null, 2))
-  } catch (error) {
-    console.error('Could not persist the board.', error)
-  }
-}
-
-function load() {
-  try {
-    if (fs.existsSync(storePath)) return normalizeStore(JSON.parse(fs.readFileSync(storePath, 'utf8')))
-  } catch (error) {
-    console.error('Store could not be read, starting from sample data.', error)
-  }
-  const demo = createDemoStore()
-  save(demo)
-  return demo
-}
-
-const store = load()
+let store = null
 
 function payload() {
   const lines = store.lines
@@ -52,7 +29,14 @@ function payload() {
   return { lines, plantMap: store.plantMap, uploads: store.uploads, companies: COMPANIES }
 }
 
-function buyer(req, res, next) {
+async function buyer(req, res, next) {
+  try {
+    store = await readStore()
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'The material list could not be loaded.' })
+    return
+  }
   const token = req.get('x-buyer-token')
   if (!token || !store.sessions.includes(token)) {
     res.status(401).json({ error: 'Sign in to the purchase desk again.' })
@@ -88,30 +72,42 @@ app.use('/api', (req, res, next) => {
   next()
 })
 
-app.get('/api/bootstrap', (req, res) => {
-  res.json(payload())
+app.get('/api/bootstrap', async (req, res) => {
+  try {
+    store = await readStore()
+    res.json(payload())
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'The material list could not be loaded.' })
+  }
 })
 
-app.post('/api/login', (req, res) => {
+app.post('/api/login', async (req, res) => {
   if (!safeEqual(req.body?.pin || '', PIN)) {
     res.status(401).json({ error: 'That PIN does not match the purchase desk.' })
     return
   }
-  const token = crypto.randomBytes(24).toString('hex')
-  store.sessions.push(token)
-  store.sessions = store.sessions.slice(-30)
-  save(store)
-  res.json({ token })
+  try {
+    store = await readStore()
+    const token = crypto.randomBytes(24).toString('hex')
+    store.sessions.push(token)
+    store.sessions = store.sessions.slice(-30)
+    await writeStore(store)
+    res.json({ token })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'The purchase desk could not sign you in.' })
+  }
 })
 
-app.post('/api/logout', buyer, (req, res) => {
+app.post('/api/logout', buyer, async (req, res) => {
   const token = req.get('x-buyer-token')
   store.sessions = store.sessions.filter((item) => item !== token)
-  save(store)
+  await writeStore(store)
   res.json({ ok: true })
 })
 
-app.post('/api/upload', buyer, (req, res) => {
+app.post('/api/upload', buyer, async (req, res) => {
   try {
     const buffer = Buffer.from(req.body?.base64 || '', 'base64')
     if (!buffer.length) {
@@ -126,7 +122,7 @@ app.post('/api/upload', buyer, (req, res) => {
       return
     }
     const rows = applyRecords(store, parsed.report, parsed.records)
-    save(store)
+    await writeStore(store)
     res.json({ report: parsed.report, rows, filename: req.body?.filename || '', ...payload() })
   } catch (error) {
     console.error(error)
@@ -134,7 +130,7 @@ app.post('/api/upload', buyer, (req, res) => {
   }
 })
 
-app.post('/api/lines', buyer, (req, res) => {
+app.post('/api/lines', buyer, async (req, res) => {
   const body = req.body || {}
   const indentNo = asId(body.indentNo)
   const material = asId(body.material)
@@ -174,33 +170,66 @@ app.post('/api/lines', buyer, (req, res) => {
     updatedAt: new Date().toISOString(),
   }
   store.lines.push(line)
-  save(store)
+  await writeStore(store)
   res.json({ line: decorate(line, store.plantMap, store.vendorNames) })
 })
 
-app.put('/api/lines/:id', buyer, (req, res) => {
+app.put('/api/lines/:id', buyer, async (req, res) => {
   const line = store.lines.find((item) => item.id === req.params.id)
   if (!line) {
     res.status(404).json({ error: 'That material is no longer on the board.' })
     return
   }
   applyEditor(line, req.body || {})
-  save(store)
+  await writeStore(store)
   res.json({ line: decorate(line, store.plantMap, store.vendorNames) })
 })
 
-app.delete('/api/lines/:id', buyer, (req, res) => {
+app.delete('/api/lines/:id', buyer, async (req, res) => {
   const before = store.lines.length
   store.lines = store.lines.filter((item) => item.id !== req.params.id)
   if (store.lines.length === before) {
     res.status(404).json({ error: 'That material is no longer on the board.' })
     return
   }
-  save(store)
+  await writeStore(store)
   res.json(payload())
 })
 
-app.put('/api/plant-map', buyer, (req, res) => {
+app.post('/api/save', buyer, async (req, res) => {
+  try {
+    if (Array.isArray(req.body?.board) && req.body.board.length) {
+      const incoming = req.body.board.map(lineFromView).filter(Boolean)
+      const merged = new Map(store.lines.filter((line) => !line.sample).map((line) => [line.id, line]))
+      incoming.forEach((line) => merged.set(line.id, line))
+      store.lines = [...merged.values()]
+    }
+    const line = store.lines.find((item) => item.id === req.body?.id)
+    if (!line) {
+      res.status(404).json({ error: 'That material is no longer on the board. Upload the SAP report again, then save.' })
+      return
+    }
+    applyEditor(line, req.body || {})
+    await writeStore(store)
+    res.json({ line: decorate(line, store.plantMap, store.vendorNames), ...payload() })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'The purchase desk could not save that change.' })
+  }
+})
+
+app.post('/api/remove', buyer, async (req, res) => {
+  const before = store.lines.length
+  store.lines = store.lines.filter((item) => item.id !== req.body?.id)
+  if (store.lines.length === before) {
+    res.status(404).json({ error: 'That material is no longer on the board.' })
+    return
+  }
+  await writeStore(store)
+  res.json(payload())
+})
+
+app.put('/api/plant-map', buyer, async (req, res) => {
   const next = {}
   for (const [plant, company] of Object.entries(req.body?.plantMap || {})) {
     const key = String(plant).trim()
@@ -211,7 +240,7 @@ app.put('/api/plant-map', buyer, (req, res) => {
     return
   }
   store.plantMap = next
-  save(store)
+  await writeStore(store)
   res.json(payload())
 })
 

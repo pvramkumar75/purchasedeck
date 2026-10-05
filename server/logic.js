@@ -507,6 +507,61 @@ export function applyEditor(line, body) {
   line.updatedAt = new Date().toISOString()
 }
 
+export function lineFromView(view) {
+  if (!view?.id) return null
+  const editor = view.editor || {}
+  const receipts = {}
+  if (Number(view.receivedQty) > 0) {
+    receipts.imported = {
+      qty: Number(view.receivedQty),
+      date: view.dates?.receipt || null,
+      movement: '101',
+    }
+  }
+  const override = {}
+  if (editor.poMadeFollowsSap === false) override.poMadeDone = Boolean(editor.poMadeDone)
+  if (editor.receiptFollowsSap === false) override.receiptDone = Boolean(editor.receiptDone)
+  override.readinessDone = Boolean(editor.readinessDone)
+  override.etdDone = Boolean(editor.etdDone)
+  override.etaDone = Boolean(editor.etaDone)
+  override.expectedArrivalDone = Boolean(editor.expectedArrivalDone)
+  for (const key of ['poMadeDate', 'readinessDate', 'etdDate', 'etaDate', 'expectedArrivalDate', 'receiptDate', 'paymentDate']) {
+    if (editor[key]) override[key] = editor[key]
+  }
+  if (['unpaid', 'partial', 'paid'].includes(editor.paymentStatus)) override.paymentStatus = editor.paymentStatus
+  return {
+    id: String(view.id),
+    plant: view.plant || '',
+    material: view.material || '',
+    shortText: view.shortText || '',
+    quantity: view.quantity ?? null,
+    orderQty: view.orderQty ?? null,
+    openQty: view.openQty ?? null,
+    unit: view.unit || '',
+    indentNo: view.indentNo || '',
+    indentItem: view.indentItem || '',
+    requisitioner: view.requisitioner || '',
+    requisitionDate: view.requisitionDate || null,
+    indentDelivery: view.indentDelivery || null,
+    poNumber: view.sapPoNumber || '',
+    poItem: view.poItem || '',
+    vendor: view.vendor || '',
+    vendorName: view.sapVendorName || '',
+    netPrice: view.netPrice ?? null,
+    poDate: view.poDate || null,
+    poDelivery: view.poDelivery || null,
+    manualPoNumber: editor.manualPoNumber || '',
+    manualVendorName: editor.manualVendorName || '',
+    remark: editor.remark || view.remark || '',
+    companyOverride: COMPANIES.includes(view.company) ? view.company : '',
+    override,
+    receipts,
+    sample: false,
+    createdAt: view.updatedAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }
+}
+
 export function normalizeStore(store) {
   store.lines ||= []
   store.vendorNames ||= {}

@@ -339,7 +339,7 @@ export default function UserApp({ go, lineId }) {
                       Indent {line.indentNo || '—'} / {line.indentItem || '—'}
                       {line.poNumber ? ` · PO ${line.poNumber}` : ''}
                       {' · '}
-                      {line.company}
+                      {line.company === 'Unassigned' ? `Plant ${line.plant || 'unassigned'}` : line.company}
                       {line.vendorName ? ` · ${line.vendorName}` : ''}
                     </p>
                     <MiniTrack stages={line.stages} statusLabel={line.statusLabel} />
