@@ -45,6 +45,47 @@ function sameDay(value, day) {
   return String(value || '').slice(0, 10) === day
 }
 
+export function workingDaysSince(iso, today = new Date()) {
+  if (!iso) return 0
+  const start = new Date(`${String(iso).slice(0, 10)}T00:00:00`)
+  const end = new Date(today)
+  end.setHours(0, 0, 0, 0)
+  if (Number.isNaN(start.getTime()) || start >= end) return 0
+  let count = 0
+  const cursor = new Date(start)
+  while (cursor < end) {
+    cursor.setDate(cursor.getDate() + 1)
+    const day = cursor.getDay()
+    if (day !== 0 && day !== 6) count += 1
+  }
+  return count
+}
+
+export function statusTone(line) {
+  const bucket = materialBucket(line)
+  if (bucket === 'indent') return workingDaysSince(line.requisitionDate) > 7 ? 'late' : 'indent'
+  if (bucket === 'received') return 'received'
+  if (bucket === 'partial') return 'partial'
+  return 'waiting'
+}
+
+export function materialBucket(line) {
+  if (!line.poNumber) return 'indent'
+  if (line.flags?.receipt) return 'received'
+  const received = Number(line.receivedQty || 0)
+  const open = line.openQty == null || line.openQty === '' ? null : Number(line.openQty)
+  const ordered = Number(line.orderQty ?? line.quantity ?? 0)
+  const partial = received > 0.0001 || (open != null && ordered > 0 && open > 0 && open + 0.0001 < ordered)
+  return partial ? 'partial' : 'open'
+}
+
+export const STATUS_FILTERS = [
+  { id: 'all', label: 'All' },
+  { id: 'indent', label: 'Indents not converted to PO' },
+  { id: 'open', label: 'PO made, material not received' },
+  { id: 'partial', label: 'PO made, partial material received' },
+]
+
 export function inPeriod(line, days) {
   if (!days) return true
   const iso = line.requisitionDate || line.poDate || line.updatedAt

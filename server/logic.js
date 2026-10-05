@@ -474,14 +474,16 @@ export function decorate(line, plantMap, vendorNames = {}) {
     etd: override.etdDate || null,
     eta: override.etaDate || null,
     expectedArrival: override.expectedArrivalDate || null,
+    expectedPo: override.expectedPoDate || null,
     receipt: override.receiptDate || sapReceipt,
     payment: override.paymentDate || null,
     sapDelivery: line.poDelivery || line.indentDelivery || null,
   }
   const company = line.companyOverride || plantMap[String(line.plant || '')] || 'Unassigned'
+  const awaiting = !poNumber
   const defs = [
     ['indent', 'Indent raised', 'Indent', true, dates.indent],
-    ['poMade', 'PO made', 'PO made', flags.poMade, dates.poMade],
+    ['poMade', awaiting ? 'Expected PO' : 'PO made', 'PO made', flags.poMade, awaiting ? dates.expectedPo : dates.poMade],
     ['readiness', 'Readiness', 'Readiness', flags.readiness, dates.readiness],
     ['etd', 'ETD', 'ETD', flags.etd, dates.etd],
     ['eta', 'ETA', 'ETA', flags.eta, dates.eta],
@@ -549,6 +551,7 @@ export function decorate(line, plantMap, vendorNames = {}) {
       poMadeAuto,
       poMadeFollowsSap: typeof override.poMadeDone !== 'boolean',
       poMadeDate: override.poMadeDate || '',
+      expectedPoDate: override.expectedPoDate || '',
       readinessDone: flags.readiness,
       readinessDate: override.readinessDate || '',
       etdDone: flags.etd,
@@ -579,7 +582,7 @@ export function applyEditor(line, body) {
   if ('etaDone' in body) override.etaDone = Boolean(body.etaDone)
   if ('expectedArrivalDone' in body) override.expectedArrivalDone = Boolean(body.expectedArrivalDone)
   if ('receiptDone' in body) setOptional('receiptDone', body.receiptDone)
-  for (const key of ['poMadeDate', 'readinessDate', 'etdDate', 'etaDate', 'expectedArrivalDate', 'receiptDate', 'paymentDate']) {
+  for (const key of ['poMadeDate', 'expectedPoDate', 'readinessDate', 'etdDate', 'etaDate', 'expectedArrivalDate', 'receiptDate', 'paymentDate']) {
     if (!(key in body)) continue
     const iso = body[key] ? toISO(body[key]) : null
     if (iso) override[key] = iso
@@ -614,7 +617,7 @@ export function lineFromView(view) {
   override.etdDone = Boolean(editor.etdDone)
   override.etaDone = Boolean(editor.etaDone)
   override.expectedArrivalDone = Boolean(editor.expectedArrivalDone)
-  for (const key of ['poMadeDate', 'readinessDate', 'etdDate', 'etaDate', 'expectedArrivalDate', 'receiptDate', 'paymentDate']) {
+  for (const key of ['poMadeDate', 'expectedPoDate', 'readinessDate', 'etdDate', 'etaDate', 'expectedArrivalDate', 'receiptDate', 'paymentDate']) {
     if (editor[key]) override[key] = editor[key]
   }
   if (['unpaid', 'partial', 'paid'].includes(editor.paymentStatus)) override.paymentStatus = editor.paymentStatus

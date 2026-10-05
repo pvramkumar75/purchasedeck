@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, getToken, setToken } from './api.js'
-import { PLANTS, pretty, qty, plantLabel } from './model.js'
+import { PLANTS, STATUS_FILTERS, materialBucket, pretty, qty, plantLabel, statusTone } from './model.js'
 import { MiniTrack } from './visuals.jsx'
 
 function Login({ onDone }) {
@@ -82,6 +82,7 @@ function MilestoneEditor({ line, board, onSaved, onDeleted, onUnauthorized, onBa
         remark: form.remark,
         poMadeDone: form.poMadeMode === 'sap' ? null : form.poMadeDone,
         poMadeDate: form.poMadeDate,
+        expectedPoDate: form.expectedPoDate,
         readinessDone: form.readinessDone,
         readinessDate: form.readinessDate,
         etdDone: form.etdDone,
@@ -148,11 +149,17 @@ function MilestoneEditor({ line, board, onSaved, onDeleted, onUnauthorized, onBa
       {!PLANTS.some((plant) => plant.id === form.company) && (
         <p className="hint">SAP plant {line.plant || 'is missing'}. Choose TPL, TCL-JDM, TCL-JDCL, or TCL (JDM+JDCL) before saving.</p>
       )}
+      {line.awaitingPo && (
+        <label className="field">
+          Expected date of PO
+          <input type="date" value={form.expectedPoDate || ''} onChange={(event) => patch({ expectedPoDate: event.target.value })} />
+        </label>
+      )}
       {line.sapPoNumber ? (
         <p className="hint">PO {line.sapPoNumber} comes from SAP.</p>
       ) : (
         <label className="field">
-          PO number
+          PO number, if already known
           <input
             value={form.manualPoNumber}
             onChange={(event) => patch({ manualPoNumber: event.target.value, poMadeDone: true, poMadeMode: 'manual' })}
@@ -163,9 +170,12 @@ function MilestoneEditor({ line, board, onSaved, onDeleted, onUnauthorized, onBa
         <p className="hint">Supplier {line.sapVendorName} comes from SAP.</p>
       ) : (
         <label className="field">
-          Supplier
+          {line.awaitingPo ? 'Supplier (tentative)' : 'Supplier'}
           <input value={form.manualVendorName} onChange={(event) => patch({ manualVendorName: event.target.value })} />
         </label>
+      )}
+      {line.awaitingPo && (
+        <p className="hint">Until the PO is in SAP, the expected PO date, supplier, readiness, ETD, ETA, and arrival below are tentative and show on the plant link.</p>
       )}
       {rows.map(([key, label, doneKey, dateKey, sap]) => (
         <div className="ms-row" key={key}>
@@ -268,6 +278,7 @@ function Desk({ onUnauthorized }) {
   const [uploadPlant, setUploadPlant] = useState('')
   const [passwords, setPasswords] = useState({})
   const [plants, setPlants] = useState([])
+  const [bucket, setBucket] = useState('all')
 
   const load = () => {
     api.bootstrap().then((next) => {
@@ -285,9 +296,12 @@ function Desk({ onUnauthorized }) {
   const editing = lines.find((line) => line.id === editId) || null
   const worklist = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    if (!needle) return lines
-    return lines.filter((line) => [line.indentNo, line.material, line.shortText, line.vendorName, line.poNumber, line.company].join(' ').toLowerCase().includes(needle))
-  }, [lines, query])
+    return lines.filter((line) => {
+      if (bucket !== 'all' && materialBucket(line) !== bucket) return false
+      if (!needle) return true
+      return [line.indentNo, line.material, line.shortText, line.vendorName, line.poNumber, line.company].join(' ').toLowerCase().includes(needle)
+    })
+  }, [lines, query, bucket])
 
   const replaceAll = (next) => {
     setData(next)
@@ -456,25 +470,30 @@ function Desk({ onUnauthorized }) {
             <div className="split">
               <section className="panel">
                 <div className="section-head"><h2>Indents not converted to PO</h2><span>{waiting.length}</span></div>
+                <p className="hint">Open a line to set the expected PO date and tentative supplier, readiness, ETD, ETA, and arrival. Indentors see those dates on the plant link.</p>
                 {waiting.length === 0 ? <p className="muted">Every indent in this view has a PO.</p> : (
                   <div className="table-wrap">
                     <table>
                       <thead>
                         <tr>
-                          <th>Indent</th><th>Item</th><th>Material</th><th>Description</th><th>Qty</th><th>Unit</th><th>Req. date</th><th>Delivery</th><th>By</th>
+                          <th>Indent</th><th>Item</th><th>Material</th><th>Description</th><th>Qty</th><th>Unit</th><th>Expected PO</th><th>Supplier</th><th>Readiness</th><th>ETD</th><th>ETA</th><th>Arrival</th><th>By</th>
                         </tr>
                       </thead>
                       <tbody>
                         {waiting.map((line) => (
-                          <tr key={line.id} className="click" onClick={() => { setEditId(line.id); setTab('edit') }}>
+                          <tr key={line.id} className={`click tone-${statusTone(line)}`} onClick={() => { setEditId(line.id); setTab('edit') }}>
                             <td>{line.indentNo || '—'}</td>
                             <td>{line.indentItem || '—'}</td>
                             <td>{line.material}</td>
                             <td className="wrap">{line.shortText}</td>
                             <td>{qty(line.quantity, line.unit)}</td>
                             <td>{line.company}</td>
-                            <td>{pretty(line.requisitionDate)}</td>
-                            <td>{pretty(line.indentDelivery)}</td>
+                            <td>{pretty(line.dates.expectedPo)}</td>
+                            <td>{line.vendorName || '—'}</td>
+                            <td>{pretty(line.dates.readiness)}</td>
+                            <td>{pretty(line.dates.etd)}</td>
+                            <td>{pretty(line.dates.eta)}</td>
+                            <td>{pretty(line.dates.expectedArrival)}</td>
                             <td>{line.requisitioner || '—'}</td>
                           </tr>
                         ))}
@@ -495,7 +514,7 @@ function Desk({ onUnauthorized }) {
                       </thead>
                       <tbody>
                         {openPos.map((line) => (
-                          <tr key={line.id} className="click" onClick={() => { setEditId(line.id); setTab('edit') }}>
+                          <tr key={line.id} className={`click tone-${statusTone(line)}`} onClick={() => { setEditId(line.id); setTab('edit') }}>
                             <td>{line.poNumber}</td>
                             <td>{line.poItem || line.indentItem}</td>
                             <td className="wrap">{line.shortText}<br /><span className="muted">{line.material}</span></td>
@@ -524,13 +543,27 @@ function Desk({ onUnauthorized }) {
                   setEditId(line.id)
                 }}
               />
+              <p className="tone-key">
+                <span><i className="indent" /> Indent, within 7 working days</span>
+                <span><i className="late" /> Indent older than 7 working days</span>
+                <span><i className="waiting" /> PO, material not received</span>
+                <span><i className="partial" /> Partial receipt</span>
+                <span><i className="received" /> Fully received</span>
+              </p>
+              <div className="plant-pick" role="group" aria-label="Milestone filters">
+                {STATUS_FILTERS.map((item) => (
+                  <button type="button" key={item.id} className={bucket === item.id ? 'on' : ''} onClick={() => setBucket(item.id)}>
+                    {item.label}
+                  </button>
+                ))}
+              </div>
               <label className="field">
                 Find a line
                 <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Indent, material, supplier, PO" />
               </label>
               <div className="rows">
                 {worklist.map((line) => (
-                  <button type="button" key={line.id} className={line.id === editId ? 'row on' : 'row'} onClick={() => setEditId(line.id)}>
+                  <button type="button" key={line.id} className={`row tone-${statusTone(line)}${line.id === editId ? ' on' : ''}`} onClick={() => setEditId(line.id)}>
                     <div>
                       <div className="row-title">
                         <h3>{line.shortText}</h3>

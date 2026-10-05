@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, getPlantToken, setPlantToken } from './api.js'
-import { COMPANIES, companiesForPlant, inPeriod, matchFields, plantLabel, pretty, qty, siblingsOf, sortForBoard } from './model.js'
+import { COMPANIES, STATUS_FILTERS, companiesForPlant, inPeriod, matchFields, materialBucket, plantLabel, pretty, qty, siblingsOf, sortForBoard, statusTone } from './model.js'
 import { EmptyState, MiniTrack, Timeline, TrackingRail } from './visuals.jsx'
 
 const EMPTY = { q: '', indent: '', item: '', supplier: '', eta: '', etd: '', readiness: '' }
@@ -130,8 +130,8 @@ function Detail({ line, siblings, go, openLine, homePath }) {
           <strong>{line.orderValue != null ? new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(line.orderValue) : '—'}</strong>
         </div>
         <div>
-          <span>Expected arrival</span>
-          <strong>{pretty(line.dates.expectedArrival || line.dates.eta || line.dates.sapDelivery)}</strong>
+          <span>{line.awaitingPo ? 'Expected PO' : 'Expected arrival'}</span>
+          <strong>{pretty(line.awaitingPo ? line.dates.expectedPo : (line.dates.expectedArrival || line.dates.eta || line.dates.sapDelivery))}</strong>
         </div>
       </div>
       <TrackingRail stages={line.stages} />
@@ -140,6 +140,7 @@ function Detail({ line, siblings, go, openLine, homePath }) {
         <div><dt>Quantity</dt><dd>{qty(line.orderQty ?? line.quantity, line.unit)}</dd></div>
         <div><dt>Still to receive</dt><dd>{line.openQty == null ? '—' : qty(line.openQty, line.unit)}</dd></div>
         <div><dt>Received</dt><dd>{qty(line.receivedQty, line.unit)}</dd></div>
+        <div><dt>Expected PO</dt><dd>{pretty(line.dates.expectedPo)}</dd></div>
         <div><dt>Supplier</dt><dd>{line.vendorName || '—'}</dd></div>
         <div><dt>Indent</dt><dd>{line.indentNo ? `${line.indentNo} / ${line.indentItem || '—'}` : '—'}</dd></div>
         <div><dt>PO item</dt><dd>{line.poNumber ? `${line.poNumber} / ${line.poItem || '—'}` : '—'}</dd></div>
@@ -227,6 +228,7 @@ export default function UserApp({ go, lineId, plantId }) {
   const [days, setDays] = useState(30)
   const [company, setCompany] = useState('ALL')
   const [fields, setFields] = useState(EMPTY)
+  const [bucket, setBucket] = useState('all')
   const [unlocked, setUnlocked] = useState(() => COMPANIES.includes(plantId) && Boolean(getPlantToken(plantId)))
   const allowed = companiesForPlant(plantId)
   const homePath = `/p/${encodeURIComponent(plantId)}`
@@ -272,10 +274,10 @@ export default function UserApp({ go, lineId, plantId }) {
   const units = allowed
 
   const visible = useMemo(() => {
-    const scoped = filtered.filter((line) => allowed.includes(line.company))
+    const scoped = filtered.filter((line) => allowed.includes(line.company) && (bucket === 'all' || materialBucket(line) === bucket))
     const rows = company === 'ALL' ? scoped : scoped.filter((line) => line.company === company)
     return sortForBoard(rows)
-  }, [filtered, company, allowed])
+  }, [filtered, company, allowed, bucket])
 
   const selected = data?.lines.find((line) => line.id === lineId) || null
   const siblings = siblingsOf(data?.lines || [], selected)
@@ -334,6 +336,20 @@ export default function UserApp({ go, lineId, plantId }) {
               <h2>Materials</h2>
               <PeriodMenu days={days} onChange={setDays} />
             </div>
+            <p className="tone-key">
+              <span><i className="indent" /> Indent, within 7 working days</span>
+              <span><i className="late" /> Indent older than 7 working days</span>
+              <span><i className="waiting" /> PO, material not received</span>
+              <span><i className="partial" /> Partial receipt</span>
+              <span><i className="received" /> Fully received</span>
+            </p>
+            <div className="plant-pick" role="group" aria-label="Status filters">
+              {STATUS_FILTERS.map((item) => (
+                <button type="button" key={item.id} className={bucket === item.id ? 'on' : ''} onClick={() => setBucket(item.id)}>
+                  {item.label}
+                </button>
+              ))}
+            </div>
             <div className="filters">
               <label className="field span">
                 Search
@@ -384,7 +400,7 @@ export default function UserApp({ go, lineId, plantId }) {
                 <button
                   type="button"
                   key={line.id}
-                  className={line.id === lineId ? 'row on' : 'row'}
+                  className={`row tone-${statusTone(line)}${line.id === lineId ? ' on' : ''}`}
                   onClick={() => openLine(line.id)}
                 >
                   <div>
@@ -403,8 +419,8 @@ export default function UserApp({ go, lineId, plantId }) {
                     <MiniTrack stages={line.stages} statusLabel={line.statusLabel} />
                   </div>
                   <div className="row-side">
-                    <span>ETA</span>
-                    <strong>{pretty(line.dates.eta || line.dates.expectedArrival || line.dates.sapDelivery)}</strong>
+                    <span>{line.awaitingPo ? 'Expected PO' : 'ETA'}</span>
+                    <strong>{pretty(line.awaitingPo ? (line.dates.expectedPo || line.dates.eta) : (line.dates.eta || line.dates.expectedArrival || line.dates.sapDelivery))}</strong>
                   </div>
                 </button>
               ))}
