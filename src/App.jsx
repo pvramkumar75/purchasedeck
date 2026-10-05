@@ -1,6 +1,31 @@
 import { useEffect, useState } from 'react'
 import BuyerApp from './BuyerApp.jsx'
 import UserApp from './UserApp.jsx'
+import { PLANTS } from './model.js'
+import { FeedbackProvider, Icon, Logo, ThemeToggle } from './ui.jsx'
+
+function Landing() {
+  return (
+    <div className="auth">
+      <div className="auth-top"><ThemeToggle /></div>
+      <div className="auth-card landing">
+        <Logo size={52} />
+        <h1>Material Tracking</h1>
+        <p className="muted">Follow indents from purchase request to factory receipt. Purchase shares a separate link for each plant.</p>
+        <div className="landing-plants">
+          {PLANTS.map((plant) => (
+            <a key={plant.id} href={`/p/${encodeURIComponent(plant.id)}`} className="landing-plant">
+              <span>{plant.label}</span>
+              <Icon name="chevron" size={16} />
+            </a>
+          ))}
+        </div>
+        <p className="muted small">Each plant link asks for the password purchase gave you.</p>
+        <a className="btn ghost wide" href="/buyer"><Icon name="key" size={16} /> Purchase desk</a>
+      </div>
+    </div>
+  )
+}
 
 export default function App() {
   const [path, setPath] = useState(window.location.pathname)
@@ -16,10 +41,11 @@ export default function App() {
     setPath(new URL(to, window.location.origin).pathname)
   }
 
-  if (path.startsWith('/buyer')) return <BuyerApp go={go} />
+  let page = <Landing />
+  if (path.startsWith('/buyer')) page = <BuyerApp go={go} />
   const scoped = path.match(/^\/p\/([^/]+)(?:\/m\/(.+))?$/)
   if (scoped) {
-    return (
+    page = (
       <UserApp
         go={go}
         plantId={decodeURIComponent(scoped[1])}
@@ -27,24 +53,5 @@ export default function App() {
       />
     )
   }
-  return (
-    <div className="app">
-      <header className="topbar">
-        <a className="brand" href="/buyer">
-          <img src="/favicon.svg" alt="" width="40" height="40" />
-          <span>
-            <strong>Material Tracking</strong>
-            <small>Plant links are shared by purchase</small>
-          </span>
-        </a>
-      </header>
-      <main className="wrap narrow">
-        <section className="login">
-          <h1>Open your plant link</h1>
-          <p>Purchase sends a separate link for TPL, TCL-JDM, TCL-JDCL, or TCL (JDM+JDCL). That link shows only your plant.</p>
-          <a className="btn" href="/buyer">Purchase desk</a>
-        </section>
-      </main>
-    </div>
-  )
+  return <FeedbackProvider>{page}</FeedbackProvider>
 }

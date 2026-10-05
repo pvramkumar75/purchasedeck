@@ -6,6 +6,15 @@ export const PLANTS = [
 ]
 export const COMPANIES = PLANTS.map((plant) => plant.id)
 
+export const STEPS = [
+  { key: 'orderPlaced', label: 'Order placed', short: 'Ordered' },
+  { key: 'ready', label: 'Ready for dispatch', short: 'Ready' },
+  { key: 'transit', label: 'In transit', short: 'Transit' },
+  { key: 'hyderabad', label: 'Arrived at Hyderabad', short: 'Hyderabad' },
+  { key: 'receipt', label: 'Received at factory', short: 'Factory' },
+  { key: 'unloaded', label: 'Unloaded', short: 'Unloaded' },
+]
+
 export function plantLabel(id) {
   return PLANTS.find((plant) => plant.id === id)?.label || id
 }
@@ -21,7 +30,21 @@ export function pretty(iso) {
   if (!iso) return '—'
   const [year, month, day] = String(iso).slice(0, 10).split('-').map(Number)
   if (!year || !month || !day) return '—'
-  return `${String(day).padStart(2, '0')} ${MONTHS[month - 1]}, ${year}`
+  return `${String(day).padStart(2, '0')} ${MONTHS[month - 1]} ${year}`
+}
+
+export function short(iso) {
+  if (!iso) return '—'
+  const [, month, day] = String(iso).slice(0, 10).split('-').map(Number)
+  if (!month || !day) return '—'
+  return `${day} ${MONTHS[month - 1]}`
+}
+
+export function todayISO(date = new Date()) {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
 }
 
 export function qty(value, unit) {
@@ -61,14 +84,6 @@ export function workingDaysSince(iso, today = new Date()) {
   return count
 }
 
-export function statusTone(line) {
-  const bucket = materialBucket(line)
-  if (bucket === 'indent') return workingDaysSince(line.requisitionDate) > 7 ? 'late' : 'indent'
-  if (bucket === 'received') return 'received'
-  if (bucket === 'partial') return 'partial'
-  return 'waiting'
-}
-
 export function materialBucket(line) {
   if (!line.poNumber) return 'indent'
   if (line.flags?.receipt) return 'received'
@@ -79,17 +94,71 @@ export function materialBucket(line) {
   return partial ? 'partial' : 'open'
 }
 
-export const STATUS_FILTERS = [
-  { id: 'all', label: 'All' },
-  { id: 'indent', label: 'Indents not converted to PO' },
-  { id: 'open', label: 'PO made, material not received' },
-  { id: 'partial', label: 'PO made, partial material received' },
-  { id: 'special', label: 'Special effort' },
+export function isLateIndent(line) {
+  return materialBucket(line) === 'indent' && workingDaysSince(line.requisitionDate) > 7
+}
+
+// A PO whose SAP delivery date has passed and is still not at the factory.
+export function isOverdue(line, today = todayISO()) {
+  const bucket = materialBucket(line)
+  if (bucket !== 'open' && bucket !== 'partial') return false
+  return Boolean(line.dates?.sapDelivery) && line.dates.sapDelivery < today
+}
+
+export function statusTone(line) {
+  const bucket = materialBucket(line)
+  if (bucket === 'indent') return isLateIndent(line) ? 'late' : 'indent'
+  if (bucket === 'received') return 'received'
+  if (bucket === 'partial') return 'partial'
+  return 'waiting'
+}
+
+export const TONES = [
+  { id: 'indent', label: 'Indent, within 7 working days' },
+  { id: 'late', label: 'Indent older than 7 working days' },
+  { id: 'waiting', label: 'PO, material not received' },
+  { id: 'partial', label: 'Partial receipt' },
+  { id: 'received', label: 'Fully received' },
 ]
 
+export const STATUS_FILTERS = [
+  { id: 'all', label: 'All' },
+  { id: 'indent', label: 'Awaiting PO', dot: 'indent' },
+  { id: 'late', label: 'Late indents', dot: 'late' },
+  { id: 'open', label: 'PO, not received', dot: 'waiting' },
+  { id: 'partial', label: 'Partly received', dot: 'partial' },
+  { id: 'received', label: 'Received', dot: 'received' },
+  { id: 'overdue', label: 'Overdue', dot: 'late' },
+  { id: 'special', label: 'Special effort', dot: 'special' },
+]
+
+export function matchesBucket(line, bucket) {
+  if (bucket === 'all') return true
+  if (bucket === 'special') return Boolean(line.special)
+  if (bucket === 'overdue') return isOverdue(line)
+  if (bucket === 'late') return isLateIndent(line)
+  return materialBucket(line) === bucket
+}
+
+export function bucketCounts(lines) {
+  const counts = Object.fromEntries(STATUS_FILTERS.map((item) => [item.id, 0]))
+  for (const line of lines) {
+    for (const item of STATUS_FILTERS) if (matchesBucket(line, item.id)) counts[item.id] += 1
+  }
+  return counts
+}
+
+export const PERIODS = [
+  { id: 30, label: 'Open + last 30 days' },
+  { id: 90, label: 'Open + last 90 days' },
+  { id: 0, label: 'Everything' },
+]
+
+// Items still open (or marked special) always show; the period only trims finished ones.
 export function inPeriod(line, days) {
   if (!days) return true
-  const iso = line.requisitionDate || line.poDate || line.updatedAt
+  if (line.special || materialBucket(line) !== 'received') return true
+  const iso = line.dates?.receipt || line.poDate || line.requisitionDate || line.updatedAt
   if (!iso) return true
   const when = new Date(`${String(iso).slice(0, 10)}T00:00:00`)
   const cutoff = new Date()
@@ -108,37 +177,64 @@ export function matchFields(line, fields) {
     const supplierOk = includes(line.vendorName, fields.supplier) || includes(line.vendor, fields.supplier)
     if (!supplierOk) return false
   }
-  if (!sameDay(line.dates?.orderPlaced, fields.orderPlaced)) return false
-  if (!sameDay(line.dates?.ready, fields.ready)) return false
-  if (!sameDay(line.dates?.transit, fields.transit)) return false
-  if (!sameDay(line.dates?.hyderabad, fields.hyderabad)) return false
-  if (!sameDay(line.dates?.receipt, fields.receipt)) return false
-  if (!sameDay(line.dates?.unloaded, fields.unloaded)) return false
-  if (fields.q) {
-    const blob = [
-      line.indentNo,
-      line.indentItem,
-      line.poNumber,
-      line.poItem,
-      line.material,
-      line.shortText,
-      line.vendorName,
-      line.vendor,
-      line.company,
-      line.requisitioner,
-    ].join(' ')
-    if (!includes(blob, fields.q)) return false
+  for (const step of STEPS) {
+    if (!sameDay(line.dates?.[step.key], fields[step.key])) return false
   }
+  if (fields.q && !matchesQuery(line, fields.q)) return false
   return true
 }
 
-export function sortForBoard(lines) {
+export function matchesQuery(line, query) {
+  const needle = String(query || '').trim().toLowerCase()
+  if (!needle) return true
+  const blob = [
+    line.indentNo,
+    line.indentItem,
+    line.poNumber,
+    line.poItem,
+    line.material,
+    line.shortText,
+    line.vendorName,
+    line.vendor,
+    line.company,
+    line.requisitioner,
+    line.plant,
+  ].join(' ').toLowerCase()
+  return needle.split(/\s+/).every((word) => blob.includes(word))
+}
+
+const PRIORITY = { late: 0, waiting: 1, partial: 1, indent: 2, received: 3 }
+
+export const SORTS = [
+  { id: 'priority', label: 'Needs attention first' },
+  { id: 'eta', label: 'Arrival date' },
+  { id: 'newest', label: 'Newest first' },
+  { id: 'oldest', label: 'Oldest first' },
+]
+
+function eta(line) {
+  return line.dates?.hyderabad || line.dates?.receipt || line.dates?.sapDelivery || line.dates?.expectedPo || '9999-99-99'
+}
+
+function started(line) {
+  return line.requisitionDate || line.poDate || String(line.updatedAt || '').slice(0, 10) || ''
+}
+
+export function sortLines(lines, sort = 'priority') {
+  const today = todayISO()
   return [...lines].sort((a, b) => {
     const special = Number(Boolean(b.special)) - Number(Boolean(a.special))
-    if (special) return special
-    const aDate = a.dates?.hyderabad || a.dates?.receipt || a.dates?.orderPlaced || '9999-99-99'
-    const bDate = b.dates?.hyderabad || b.dates?.receipt || b.dates?.orderPlaced || '9999-99-99'
-    return aDate.localeCompare(bDate) || String(a.indentNo).localeCompare(String(b.indentNo)) || String(a.indentItem).localeCompare(String(b.indentItem), undefined, { numeric: true })
+    if (sort === 'priority') {
+      if (special) return special
+      const overdue = Number(isOverdue(b, today)) - Number(isOverdue(a, today))
+      if (overdue) return overdue
+      const tone = PRIORITY[statusTone(a)] - PRIORITY[statusTone(b)]
+      if (tone) return tone
+      return eta(a).localeCompare(eta(b)) || started(a).localeCompare(started(b))
+    }
+    if (sort === 'eta') return eta(a).localeCompare(eta(b))
+    if (sort === 'oldest') return started(a).localeCompare(started(b))
+    return started(b).localeCompare(started(a))
   })
 }
 
@@ -149,3 +245,11 @@ export function siblingsOf(lines, line) {
   return [line]
 }
 
+export function currentStage(line) {
+  return line.stages?.find((stage) => stage.current) || null
+}
+
+export function progressOf(line) {
+  const done = line.stages?.filter((stage) => stage.done).length || 0
+  return { done, total: line.stages?.length || 6, pct: Math.round((done / (line.stages?.length || 6)) * 100) }
+}

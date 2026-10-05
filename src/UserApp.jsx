@@ -1,27 +1,33 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, getPlantToken, setPlantToken } from './api.js'
-import { COMPANIES, STATUS_FILTERS, companiesForPlant, inPeriod, matchFields, materialBucket, plantLabel, pretty, qty, siblingsOf, sortForBoard, statusTone } from './model.js'
-import { EmptyState, MiniTrack, NoticeBell, SpecialPanel, Timeline, TrackingRail } from './visuals.jsx'
+import {
+  COMPANIES,
+  PERIODS,
+  SORTS,
+  STATUS_FILTERS,
+  STEPS,
+  bucketCounts,
+  companiesForPlant,
+  inPeriod,
+  inr,
+  isOverdue,
+  matchFields,
+  matchesBucket,
+  plantLabel,
+  pretty,
+  qty,
+  siblingsOf,
+  sortLines,
+  statusTone,
+} from './model.js'
+import { Chips, Icon, Logo, SearchBox, Skeleton, ThemeToggle, ago, copyText, useFeedback, useNow, useSlashFocus } from './ui.jsx'
+import { EmptyState, MiniTrack, NoticeBell, SpecialPanel, StackBar, StatusBadge, Timeline, ToneKey, TrackingRail } from './visuals.jsx'
 
-const EMPTY = { q: '', indent: '', item: '', supplier: '', orderPlaced: '', ready: '', transit: '', hyderabad: '', receipt: '', unloaded: '' }
-const PERIODS = [
-  [30, 'Last 30 days'],
-  [90, 'Last 90 days'],
-  [0, 'All dates'],
-]
-
-function statsFor(rows) {
-  return {
-    total: rows.length,
-    waiting: rows.filter((row) => row.awaitingPo).length,
-    transit: rows.filter((row) => row.undelivered).length,
-    arrived: rows.filter((row) => row.flags.receipt).length,
-  }
-}
+const EMPTY = { q: '', indent: '', item: '', supplier: '', ...Object.fromEntries(STEPS.map((step) => [step.key, ''])) }
 
 function InstallButton() {
   const [promptEvent, setPromptEvent] = useState(null)
-  const [hint, setHint] = useState('')
+  const { toast } = useFeedback()
   const standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone
 
   useEffect(() => {
@@ -43,57 +49,25 @@ function InstallButton() {
       return
     }
     const ios = /iphone|ipad|ipod/i.test(navigator.userAgent)
-    setHint(ios ? 'On iPhone or iPad, tap Share, then Add to Home Screen.' : 'In the browser menu, choose Install app or Add to Home Screen.')
+    toast(ios ? 'On iPhone or iPad, tap Share, then Add to Home Screen.' : 'In the browser menu, choose Install app or Add to Home Screen.', { tone: 'info', duration: 6000 })
   }
 
   return (
-    <div className="install">
-      <button type="button" className="btn" onClick={install}>
-        Install app
-      </button>
-      {hint && <p className="hint">{hint}</p>}
-    </div>
+    <button type="button" className="icon-btn" onClick={install} title="Install app" aria-label="Install app">
+      <Icon name="install" />
+    </button>
   )
 }
 
-function PeriodMenu({ days, onChange }) {
-  const [open, setOpen] = useState(false)
-  const label = PERIODS.find(([value]) => value === days)?.[1] || 'Last 30 days'
-  return (
-    <div className="period">
-      <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
-        <span className="clock" aria-hidden="true">⏱</span>
-        {label}
-        <span aria-hidden="true">▾</span>
-      </button>
-      {open && (
-        <ul>
-          {PERIODS.map(([value, name]) => (
-            <li key={value}>
-              <button
-                type="button"
-                className={value === days ? 'on' : ''}
-                onClick={() => {
-                  onChange(value)
-                  setOpen(false)
-                }}
-              >
-                {name}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
-}
+function Detail({ line, siblings, onClose, openLine, onMark }) {
+  const { toast } = useFeedback()
+  useEffect(() => {
+    const onKey = (event) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
 
-function Detail({ line, siblings, go, openLine, homePath, onMark }) {
-  const close = () => {
-    if (window.history.state?.view === 'detail') window.history.back()
-    else go(homePath)
-  }
-  const copy = async () => {
+  const share = async () => {
     const url = window.location.href
     if (navigator.share) {
       try {
@@ -103,79 +77,71 @@ function Detail({ line, siblings, go, openLine, homePath, onMark }) {
         /* clipboard fallback */
       }
     }
-    await navigator.clipboard.writeText(url)
+    if (await copyText(url)) toast('Link copied. It opens after the plant password.')
   }
   const groupLabel = line.poNumber ? `Items on PO ${line.poNumber}` : `Items on indent ${line.indentNo || line.id}`
+  const overdue = isOverdue(line)
 
   return (
-    <article className="detail">
-      <div className="status-bar-top">
-        <TrackingRail stages={line.stages} />
+    <article className="detail" aria-label={line.shortText}>
+      <div className="detail-bar">
+        <button type="button" className="icon-btn" onClick={onClose} aria-label="Back to all materials"><Icon name="back" /></button>
+        <button type="button" className="btn small ghost" onClick={share}><Icon name="share" size={14} /> Share</button>
       </div>
-      <div className="detail-top">
-        <button type="button" className="btn ghost" onClick={close}>
-          All materials
-        </button>
-        <button type="button" className="btn ghost" onClick={copy}>
-          Share item
-        </button>
+      <div className="detail-head">
+        <p className="eyebrow">{plantLabel(line.company)}</p>
+        <h2>{line.shortText}</h2>
+        <StatusBadge line={line} />
+        <p className="meta mono">{line.material || 'No code'}</p>
       </div>
-      <div className="status-hero">
-        <p className="eyebrow">{line.company}</p>
-        <h2>{line.statusLabel}</h2>
-      </div>
-      <h3 className="item-name">{line.shortText}</h3>
-      <p className="lede">
-        <button type="button" className="code" onClick={() => openLine(line.id)}>
-          {line.material || 'No code'}
-        </button>
-      </p>
-      <div className="money">
+      <TrackingRail stages={line.stages} />
+      <div className="hero-stats">
         <div>
-          <span>Order value</span>
-          <strong>{line.orderValue != null ? new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(line.orderValue) : '—'}</strong>
+          <span>Now</span>
+          <strong>{line.statusLabel}</strong>
         </div>
         <div>
-          <span>{line.awaitingPo ? 'Expected PO' : 'Hyderabad'}</span>
+          <span>{line.awaitingPo ? 'Expected PO' : 'At Hyderabad'}</span>
           <strong>{pretty(line.awaitingPo ? line.dates.expectedPo : line.dates.hyderabad)}</strong>
         </div>
+        <div>
+          <span>SAP delivery</span>
+          <strong className={overdue ? 'warn' : ''}>{pretty(line.dates.sapDelivery)}{overdue ? ' · overdue' : ''}</strong>
+        </div>
+        {line.orderValue != null && (
+          <div>
+            <span>Order value</span>
+            <strong>{inr(line.orderValue)}</strong>
+          </div>
+        )}
       </div>
+      {line.remark && <p className="remark"><Icon name="file" size={14} /> <span><strong>Note from purchase:</strong> {line.remark}</span></p>}
       <Timeline line={line} />
       <SpecialPanel line={line} onMark={onMark} />
       <dl className="facts">
         <div><dt>Quantity</dt><dd>{qty(line.orderQty ?? line.quantity, line.unit)}</dd></div>
         <div><dt>Still to receive</dt><dd>{line.openQty == null ? '—' : qty(line.openQty, line.unit)}</dd></div>
         <div><dt>Received</dt><dd>{qty(line.receivedQty, line.unit)}</dd></div>
-        <div><dt>Expected PO</dt><dd>{pretty(line.dates.expectedPo)}</dd></div>
         <div><dt>Supplier</dt><dd>{line.vendorName || '—'}</dd></div>
         <div><dt>Indent</dt><dd>{line.indentNo ? `${line.indentNo} / ${line.indentItem || '—'}` : '—'}</dd></div>
         <div><dt>PO item</dt><dd>{line.poNumber ? `${line.poNumber} / ${line.poItem || '—'}` : '—'}</dd></div>
         <div><dt>Requisitioner</dt><dd>{line.requisitioner || '—'}</dd></div>
-        <div><dt>SAP delivery</dt><dd>{pretty(line.dates.sapDelivery)}</dd></div>
+        <div><dt>Updated</dt><dd>{ago(line.updatedAt)}</dd></div>
       </dl>
-      {line.remark && <p className="remark">Note from purchase: {line.remark}</p>}
-      <section className="siblings">
-        <h3>
-          {groupLabel}
-          <span>{siblings.length}</span>
-        </h3>
-        <div className="sib-list">
-          {siblings.map((item) => (
-            <button
-              type="button"
-              key={item.id}
-              className={item.id === line.id ? 'sib on' : 'sib'}
-              onClick={() => openLine(item.id)}
-            >
-              <strong>{item.shortText}</strong>
-              <span>
-                {item.material} · Item {item.poItem || item.indentItem || '—'}
-              </span>
-              <MiniTrack stages={item.stages} statusLabel={item.statusLabel} />
-            </button>
-          ))}
-        </div>
-      </section>
+      {siblings.length > 1 && (
+        <section className="siblings">
+          <h3>{groupLabel} <span className="count">{siblings.length}</span></h3>
+          <div className="sib-list">
+            {siblings.map((item) => (
+              <button type="button" key={item.id} className={`sib tone-${statusTone(item)}${item.id === line.id ? ' on' : ''}`} onClick={() => openLine(item.id)}>
+                <strong>{item.shortText}</strong>
+                <span className="meta">{item.material} · Item {item.poItem || item.indentItem || '—'}</span>
+                <MiniTrack line={item} />
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
     </article>
   )
 }
@@ -200,43 +166,52 @@ function PlantLock({ plantId, onUnlock }) {
     }
   }
   return (
-    <div className="app">
-      <header className="topbar">
-        <a className="brand" href="/">
-          <img src="/favicon.svg" alt="" width="40" height="40" />
-          <span>
-            <strong>{known ? plantLabel(plantId) : 'Material Tracking'}</strong>
-            <small>Plant status</small>
-          </span>
-        </a>
-      </header>
-      <main className="wrap narrow">
-        <form className="login" onSubmit={submit}>
-          <h1>{known ? plantLabel(plantId) : 'Unknown plant'}</h1>
-          <p>{known ? 'Enter the password purchase shared for this plant.' : 'Ask purchase for the correct plant link.'}</p>
-          {known && (
-            <label className="field">
-              Password
-              <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoFocus />
-            </label>
-          )}
-          {error && <p className="error">{error}</p>}
-          {known && <button className="btn" type="submit" disabled={busy}>{busy ? 'Checking…' : 'View materials'}</button>}
-        </form>
-      </main>
+    <div className="auth">
+      <div className="auth-top"><ThemeToggle /></div>
+      <form className="auth-card" onSubmit={submit}>
+        <Logo size={48} />
+        <h1>{known ? plantLabel(plantId) : 'Unknown plant'}</h1>
+        <p className="muted">{known ? 'Enter the password purchase shared for this plant. You stay signed in on this device for 30 days.' : 'This link is not right. Ask purchase for the plant link.'}</p>
+        {known && (
+          <label className="field">
+            Password
+            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoFocus autoComplete="current-password" />
+          </label>
+        )}
+        {error && <p className="error"><Icon name="alert" size={15} /> {error}</p>}
+        {known && <button className="btn wide" type="submit" disabled={busy || !password}>{busy ? 'Checking…' : 'View materials'}</button>}
+      </form>
     </div>
   )
 }
 
+function PeriodSelect({ value, onChange }) {
+  return (
+    <label className="select-pill">
+      <Icon name="clock" size={15} />
+      <select value={value} onChange={(event) => onChange(Number(event.target.value))} aria-label="Period">
+        {PERIODS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+      </select>
+    </label>
+  )
+}
+
 export default function UserApp({ go, lineId, plantId }) {
+  const now = useNow(20000)
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
+  const [loadedAt, setLoadedAt] = useState(null)
+  const [refreshing, setRefreshing] = useState(false)
   const [days, setDays] = useState(30)
   const [company, setCompany] = useState('ALL')
   const [fields, setFields] = useState(EMPTY)
   const [bucket, setBucket] = useState('all')
+  const [sort, setSort] = useState('priority')
+  const [showFilters, setShowFilters] = useState(false)
   const [unlocked, setUnlocked] = useState(() => COMPANIES.includes(plantId) && Boolean(getPlantToken(plantId)))
-  const allowed = companiesForPlant(plantId)
+  const searchRef = useRef(null)
+  useSlashFocus(searchRef)
+  const allowed = useMemo(() => companiesForPlant(plantId), [plantId])
   const homePath = `/p/${encodeURIComponent(plantId)}`
 
   useEffect(() => {
@@ -245,35 +220,42 @@ export default function UserApp({ go, lineId, plantId }) {
     setCompany('ALL')
   }, [plantId])
 
-  useEffect(() => {
-    if (!unlocked) return undefined
-    let live = true
-    api.plantBootstrap(plantId)
-      .then((next) => {
-        if (live) setData(next)
-      })
-      .catch((err) => {
-        if (!live) return
-        if (err.status === 401) {
-          setPlantToken(plantId, '')
-          setUnlocked(false)
-          return
-        }
-        setError(err.message)
-      })
-    return () => {
-      live = false
+  const lock = useCallback(() => {
+    setPlantToken(plantId, '')
+    setUnlocked(false)
+    setData(null)
+  }, [plantId])
+
+  const load = useCallback(async (manual) => {
+    if (manual) setRefreshing(true)
+    try {
+      const next = await api.plantBootstrap(plantId)
+      setData(next)
+      setLoadedAt(next.serverTime || new Date().toISOString())
+      setError('')
+    } catch (err) {
+      if (err.status === 401) lock()
+      else setError(err.message)
+    } finally {
+      setRefreshing(false)
     }
-  }, [plantId, unlocked])
+  }, [plantId, lock])
 
   useEffect(() => {
     if (!unlocked) return undefined
+    load()
     const timer = setInterval(() => {
-      if (document.visibilityState !== 'visible') return
-      api.plantBootstrap(plantId).then(setData).catch(() => {})
+      if (document.visibilityState === 'visible') load()
     }, 45000)
-    return () => clearInterval(timer)
-  }, [plantId, unlocked])
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') load()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [unlocked, load])
 
   useEffect(() => {
     const selected = data?.lines.find((line) => line.id === lineId)
@@ -281,197 +263,177 @@ export default function UserApp({ go, lineId, plantId }) {
     if (lineId) window.scrollTo(0, 0)
   }, [lineId, data, plantId])
 
-  const filtered = useMemo(() => {
-    const lines = data?.lines || []
-    return lines.filter((line) => inPeriod(line, days) && matchFields(line, fields))
-  }, [data, days, fields])
+  const lines = useMemo(() => data?.lines || [], [data])
+  const filtered = useMemo(() => lines.filter((line) => inPeriod(line, days) && matchFields(line, fields)), [lines, days, fields])
+  const scoped = useMemo(() => filtered.filter((line) => allowed.includes(line.company) && (company === 'ALL' || line.company === company)), [filtered, allowed, company])
+  const counts = useMemo(() => bucketCounts(scoped), [scoped])
+  const visible = useMemo(() => sortLines(scoped.filter((line) => matchesBucket(line, bucket)), sort), [scoped, bucket, sort])
 
-  const units = allowed
-
-  const visible = useMemo(() => {
-    const scoped = filtered.filter((line) => allowed.includes(line.company) && (bucket === 'all' || (bucket === 'special' ? line.special : materialBucket(line) === bucket)))
-    const rows = company === 'ALL' ? scoped : scoped.filter((line) => line.company === company)
-    return sortForBoard(rows)
-  }, [filtered, company, allowed, bucket])
-
-  const selected = data?.lines.find((line) => line.id === lineId) || null
-  const siblings = siblingsOf(data?.lines || [], selected)
-  const activeFilters = Object.values(fields).some(Boolean)
+  const selected = lines.find((line) => line.id === lineId) || null
+  const siblings = siblingsOf(lines, selected)
+  const advancedCount = Object.entries(fields).filter(([key, value]) => key !== 'q' && value).length
   const set = (key) => (event) => setFields((current) => ({ ...current, [key]: event.target.value }))
   const openLine = (id) => go(`${homePath}/m/${encodeURIComponent(id)}`, { view: 'detail' })
+  const closeLine = useCallback(() => {
+    if (window.history.state?.view === 'detail') window.history.back()
+    else go(homePath)
+  }, [go, homePath])
+
+  const signOut = async () => {
+    try { await api.plantLogout(plantId) } catch { /* local sign-out still happens */ }
+    lock()
+  }
 
   if (!unlocked) return <PlantLock plantId={plantId} onUnlock={() => setUnlocked(true)} />
 
   return (
-    <div className="app">
+    <div className="app plant">
       <header className="topbar">
         <a className="brand" href={homePath} onClick={(event) => { event.preventDefault(); go(homePath) }}>
-          <img src="/favicon.svg" alt="" width="40" height="40" />
-          <span>
-            <strong>{plantLabel(plantId)}</strong>
-            <small>Material status</small>
-          </span>
+          <Logo />
+          <span><strong>{plantLabel(plantId)}</strong><small>Material status</small></span>
         </a>
         <div className="top-actions">
-          <NoticeBell notices={data?.notices || []} onOpen={openLine} />
+          <button type="button" className={`sync${refreshing ? ' spinning' : ''}`} onClick={() => load(true)} title="Refresh now">
+            <Icon name="refresh" size={15} />
+            <span>{loadedAt ? ago(loadedAt, now) : 'Loading'}</span>
+          </button>
+          <NoticeBell notices={data?.notices || []} onOpen={openLine} scope={`plant-${plantId}`} />
           <InstallButton />
+          <ThemeToggle />
+          <button type="button" className="icon-btn" onClick={signOut} title="Sign out" aria-label="Sign out"><Icon name="logout" /></button>
         </div>
       </header>
-      <main className={`wrap shell${selected ? ' has-detail' : ''}`}>
+
+      <main className={`wrap split-view${selected ? ' has-detail' : ''}`}>
         <section className="list-pane">
-          <div className="units" role="tablist" aria-label="Units">
-            {units.map((name) => {
-              const rows = filtered.filter((line) => line.company === name)
-              const stats = statsFor(rows)
-              return (
-                <button
-                  type="button"
-                  key={name}
-                  role="tab"
-                  aria-selected={company === name}
-                  data-co={name}
-                  className={company === name ? 'unit on' : 'unit'}
-                  onClick={() => setCompany((current) => (current === name ? 'ALL' : name))}
-                >
-                  <div className="unit-head">
-                    <strong>{plantLabel(name)}</strong>
-                    <span>{stats.total}</span>
-                  </div>
-                  <ul>
-                    <li><b>{stats.waiting}</b> awaiting PO</li>
-                    <li><b>{stats.transit}</b> PO not received</li>
-                    <li><b>{stats.arrived}</b> at factory</li>
-                  </ul>
-                </button>
-              )
-            })}
+          {allowed.length > 1 ? (
+            <div className="units" role="tablist" aria-label="Units">
+              {allowed.map((name) => {
+                const rows = filtered.filter((line) => line.company === name)
+                return (
+                  <button
+                    type="button"
+                    key={name}
+                    role="tab"
+                    aria-selected={company === name}
+                    className={`unit${company === name ? ' on' : ''}`}
+                    onClick={() => setCompany((current) => (current === name ? 'ALL' : name))}
+                  >
+                    <span className="unit-head"><strong>{plantLabel(name)}</strong><span>{rows.length}</span></span>
+                    <StackBar lines={rows} />
+                  </button>
+                )
+              })}
+            </div>
+          ) : null}
+
+          <div className="list-head">
+            <h1>Materials</h1>
+            <PeriodSelect value={days} onChange={setDays} />
           </div>
-          <p className="unit-note">
-            {plantId === 'TCL' ? 'This link covers TCL-JDM and TCL-JDCL.' : `This link is only for ${plantLabel(plantId)}.`}
-          </p>
-          <section className="panel">
-            <div className="section-head">
-              <h2>Materials</h2>
-              <PeriodMenu days={days} onChange={setDays} />
-            </div>
-            <p className="tone-key">
-              <span><i className="indent" /> Indent, within 7 working days</span>
-              <span><i className="late" /> Indent older than 7 working days</span>
-              <span><i className="waiting" /> PO, material not received</span>
-              <span><i className="partial" /> Partial receipt</span>
-              <span><i className="received" /> Fully received</span>
-            </p>
-            <div className="plant-pick" role="group" aria-label="Status filters">
-              {STATUS_FILTERS.map((item) => (
-                <button type="button" key={item.id} className={bucket === item.id ? 'on' : ''} onClick={() => setBucket(item.id)}>
-                  {item.label}
+
+          {data && (
+            <section className="summary">
+              {[
+                ['indent', 'Awaiting PO', counts.indent, 'indent'],
+                ['open', 'PO, not received', counts.open + counts.partial, 'waiting'],
+                ['overdue', 'Overdue', counts.overdue, 'late'],
+                ['received', 'Received', counts.received, 'received'],
+              ].map(([id, label, value, tone]) => (
+                <button type="button" key={id} className={`mini-kpi tone-${tone}${bucket === id ? ' on' : ''}`} onClick={() => setBucket((current) => (current === id ? 'all' : id))}>
+                  <strong>{value}</strong>
+                  <span>{label}</span>
                 </button>
               ))}
+            </section>
+          )}
+
+          <div className="toolbar">
+            <SearchBox value={fields.q} onChange={(value) => setFields((current) => ({ ...current, q: value }))} placeholder="Search indent, PO, material, supplier" inputRef={searchRef} />
+            <button type="button" className={`btn ghost small${showFilters ? ' active' : ''}`} onClick={() => setShowFilters((value) => !value)} aria-expanded={showFilters}>
+              <Icon name="sliders" size={15} /> Filters{advancedCount ? <span className="chip-count">{advancedCount}</span> : null}
+            </button>
+            <select value={sort} onChange={(event) => setSort(event.target.value)} aria-label="Sort">
+              {SORTS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+            </select>
+          </div>
+
+          {showFilters && (
+            <div className="filter-panel">
+              <label className="field">Indent number<input value={fields.indent} onChange={set('indent')} inputMode="numeric" /></label>
+              <label className="field">Item or code<input value={fields.item} onChange={set('item')} placeholder="10 or RM-2201" /></label>
+              <label className="field">Supplier<input value={fields.supplier} onChange={set('supplier')} /></label>
+              {STEPS.map((step) => (
+                <label className="field" key={step.key}>{step.label} on<input type="date" value={fields[step.key]} onChange={set(step.key)} /></label>
+              ))}
+              {advancedCount > 0 && <button type="button" className="text-btn small" onClick={() => setFields((current) => ({ ...EMPTY, q: current.q }))}>Clear these filters</button>}
             </div>
-            <div className="filters">
-              <label className="field span">
-                Search
-                <input value={fields.q} onChange={set('q')} placeholder="Indent, PO, material, supplier" />
-              </label>
-              <label className="field">
-                Indent number
-                <input value={fields.indent} onChange={set('indent')} inputMode="numeric" />
-              </label>
-              <label className="field">
-                Item number / code
-                <input value={fields.item} onChange={set('item')} placeholder="10 or RM-2201" />
-              </label>
-              <label className="field">
-                Supplier
-                <input value={fields.supplier} onChange={set('supplier')} />
-              </label>
-              <label className="field">
-                Order placed
-                <input type="date" value={fields.orderPlaced} onChange={set('orderPlaced')} />
-              </label>
-              <label className="field">
-                Ready for dispatch
-                <input type="date" value={fields.ready} onChange={set('ready')} />
-              </label>
-              <label className="field">
-                In transit
-                <input type="date" value={fields.transit} onChange={set('transit')} />
-              </label>
-              <label className="field">
-                Arrived at Hyderabad
-                <input type="date" value={fields.hyderabad} onChange={set('hyderabad')} />
-              </label>
-              <label className="field">
-                Received at factory
-                <input type="date" value={fields.receipt} onChange={set('receipt')} />
-              </label>
-              <label className="field">
-                Unloaded
-                <input type="date" value={fields.unloaded} onChange={set('unloaded')} />
-              </label>
-            </div>
-            <div className="result-line">
-              <p aria-live="polite">{error ? error : data ? `${visible.length} material${visible.length === 1 ? '' : 's'}` : 'Loading materials…'}</p>
-              {activeFilters && (
-                <button type="button" className="text-btn" onClick={() => setFields(EMPTY)}>
-                  Clear filters
-                </button>
-              )}
-            </div>
-            {!data && !error && <p className="muted">Loading materials…</p>}
-            {data && visible.length === 0 && (
-              <EmptyState
-                title={data.lines.length ? 'No materials in this view' : 'No materials yet'}
-                text={data.lines.length ? 'Widen the date range or clear an indent, supplier, or date.' : 'Purchase has not published a status yet.'}
-              />
+          )}
+
+          <Chips label="Status" value={bucket} onChange={setBucket} items={STATUS_FILTERS.map((item) => ({ ...item, count: counts[item.id] }))} />
+
+          <div className="list-meta">
+            <span aria-live="polite">{error || (data ? `${visible.length} material${visible.length === 1 ? '' : 's'}` : 'Loading…')}</span>
+            {(advancedCount > 0 || fields.q || bucket !== 'all' || company !== 'ALL') && (
+              <button type="button" className="text-btn small" onClick={() => { setFields(EMPTY); setBucket('all'); setCompany('ALL') }}>Clear all</button>
             )}
-            <div className="rows">
-              {visible.map((line) => (
-                <button
-                  type="button"
-                  key={line.id}
-                  className={`row tone-${statusTone(line)}${line.special ? ' special' : ''}${line.id === lineId ? ' on' : ''}`}
-                  onClick={() => openLine(line.id)}
-                >
-                  <div>
-                    <MiniTrack stages={line.stages} statusLabel={line.statusLabel} />
-                    <div className="row-title">
-                      <h3>{line.shortText}</h3>
-                    </div>
-                    <p className="meta">
-                      <span className="code-inline">{line.material || '—'}</span>
-                      {' · '}
-                      Indent {line.indentNo || '—'} / {line.indentItem || '—'}
-                      {line.poNumber ? ` · PO ${line.poNumber}` : ''}
-                      {' · '}
-                      {line.company === 'Unassigned' ? `Plant ${line.plant || 'unassigned'}` : line.company}
-                      {line.vendorName ? ` · ${line.vendorName}` : ''}
-                      {line.special ? ' · Special' : ''}
-                    </p>
-                  </div>
-                  <div className="row-side">
-                    <span>{line.awaitingPo ? 'Expected PO' : 'Hyderabad'}</span>
-                    <strong>{pretty(line.awaitingPo ? line.dates.expectedPo : line.dates.hyderabad)}</strong>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </section>
+          </div>
+
+          {!data && !error && <Skeleton rows={5} />}
+          {data && visible.length === 0 && (
+            <EmptyState
+              title={lines.length ? 'No materials in this view' : 'No materials yet'}
+              text={lines.length ? 'Try “Everything”, another status, or clear the search.' : 'Purchase has not published a status yet.'}
+            />
+          )}
+          <div className="rows">
+            {visible.map((line) => (
+              <button
+                type="button"
+                key={line.id}
+                className={`row plain tone-${statusTone(line)}${line.special ? ' special' : ''}${line.id === lineId ? ' on' : ''}`}
+                onClick={() => openLine(line.id)}
+              >
+                <span className="row-main">
+                  <span className="row-title">
+                    <strong>{line.shortText}</strong>
+                    <StatusBadge line={line} />
+                  </span>
+                  <span className="meta">
+                    <span className="mono">{line.material || '—'}</span>
+                    {' · '}Indent {line.indentNo || '—'}/{line.indentItem || '—'}
+                    {line.poNumber ? ` · PO ${line.poNumber}` : ''}
+                    {allowed.length > 1 ? ` · ${plantLabel(line.company)}` : ''}
+                    {line.vendorName ? ` · ${line.vendorName}` : ''}
+                  </span>
+                  <MiniTrack line={line} />
+                </span>
+                <span className="row-side">
+                  <small>{line.awaitingPo ? 'Expected PO' : 'At Hyderabad'}</small>
+                  <strong>{pretty(line.awaitingPo ? line.dates.expectedPo : line.dates.hyderabad)}</strong>
+                </span>
+              </button>
+            ))}
+          </div>
+          {data && <ToneKey />}
         </section>
+
         {selected && (
           <Detail
             line={selected}
             siblings={siblings}
-            go={go}
+            onClose={closeLine}
             openLine={openLine}
-            homePath={homePath}
-            onMark={async (body) => setData(await api.markSpecial({ ...body, id: selected.id }, plantId))}
+            onMark={async (body) => {
+              const next = await api.markSpecial({ ...body, id: selected.id }, plantId)
+              setData(next)
+            }}
           />
         )}
       </main>
       <footer className="foot wrap">
-        <span>Status published for indentors. Install this page on a phone or computer.</span>
-        <a href="/buyer">Purchase desk</a>
+        <span>Status published by purchase. Install this page on your phone for quick access.</span>
       </footer>
     </div>
   )
