@@ -1,0 +1,26 @@
+{
+  "name": "Material Tracking",
+  "short_name": "MatTrack",
+  "description": "Live status of indented materials for TPL, TCL-JDM and TCL-JDCL.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f6f3ee",
+  "theme_color": "#f6f3ee",
+  "shortcuts": [
+    {
+      "name": "Purchase desk",
+      "short_name": "Purchase",
+      "url": "/buyer",
+      "description": "Update milestones and upload SAP reports"
+    }
+  ],
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
