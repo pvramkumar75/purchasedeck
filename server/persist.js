@@ -7,6 +7,8 @@ const dataDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'd
 const storePath = process.env.STORE_FILE || (process.env.VERCEL ? '/tmp/material-tracking-store.json' : path.join(dataDir, 'store.json'))
 const BLOB_NAME = 'material-tracking/store.json'
 const ATTEMPTS = 10
+// Stay well inside Vercel's 30 second function limit.
+const DEADLINE_MS = 20000
 
 export class HttpError extends Error {
   constructor(status, message, extra = {}) {
@@ -16,46 +18,56 @@ export class HttpError extends Error {
   }
 }
 
-class StoreConflict extends Error {}
+class StoreConflict extends Error {
+  constructor(message, style = null) {
+    super(message)
+    this.style = style
+  }
+}
 
 const useBlob = () => Boolean(process.env.BLOB_READ_WRITE_TOKEN)
 
-function serialize(store) {
-  return JSON.stringify(store)
-}
-
-// One cached copy per server instance so unchanged reads come back as 304s.
-let cached = null
+// The etag that `get` reports is passed back to `put` as ifMatch. In case this
+// Blob store wants it written differently, try the other common spellings, and
+// as a last resort fall back to plain overwrites instead of failing every save.
+const ETAG_STYLES = [
+  (etag) => etag,
+  (etag) => etag.replace(/^W\//, '').replace(/"/g, ''),
+  (etag) => `"${etag.replace(/^W\//, '').replace(/"/g, '')}"`,
+]
+let etagStyle = 0
+let conditionalWrites = true
 
 async function readBlob() {
   const { get } = await import('@vercel/blob')
-  // Keep our own reference: another request may replace `cached` while this one waits.
-  const known = cached
-  const result = await get(BLOB_NAME, {
-    access: 'private',
-    useCache: false,
-    ...(known ? { ifNoneMatch: known.etag } : {}),
-  })
+  const result = await get(BLOB_NAME, { access: 'private', useCache: false })
   if (!result) return null
-  if (result.statusCode === 304 && known) return { text: known.text, version: known.etag }
   if (result.statusCode !== 200 || !result.stream) throw new Error(`Blob read returned ${result.statusCode}`)
   const text = await new Response(result.stream).text()
-  cached = { etag: result.blob.etag, text }
-  return { text, version: result.blob.etag }
+  return { text, version: result.blob.etag || null }
 }
 
 async function writeBlob(text, version) {
   const { put, BlobPreconditionFailedError } = await import('@vercel/blob')
+  const options = { access: 'private', addRandomSuffix: false, contentType: 'application/json' }
+  if (!version) {
+    // Creating the store for the first time: never overwrite one that exists.
+    try {
+      await put(BLOB_NAME, text, { ...options, allowOverwrite: false })
+    } catch (error) {
+      throw new StoreConflict(error.message)
+    }
+    return
+  }
+  if (!conditionalWrites) {
+    await put(BLOB_NAME, text, { ...options, allowOverwrite: true })
+    return
+  }
+  const style = etagStyle
   try {
-    const result = await put(BLOB_NAME, text, {
-      access: 'private',
-      addRandomSuffix: false,
-      contentType: 'application/json',
-      ...(version ? { ifMatch: version } : { allowOverwrite: false }),
-    })
-    cached = result.etag ? { etag: result.etag, text } : null
+    await put(BLOB_NAME, text, { ...options, ifMatch: ETAG_STYLES[style](version) })
   } catch (error) {
-    if (error instanceof BlobPreconditionFailedError || !version) throw new StoreConflict(error.message)
+    if (error instanceof BlobPreconditionFailedError) throw new StoreConflict(error.message, style)
     throw error
   }
 }
@@ -74,41 +86,45 @@ function writeFile(text) {
 }
 
 async function save(store, version) {
-  const text = serialize(store)
+  const text = JSON.stringify(store)
   if (useBlob()) await writeBlob(text, version)
   else writeFile(text)
 }
 
-async function load() {
-  const raw = useBlob() ? await readBlob() : readFile()
+const readRaw = () => (useBlob() ? readBlob() : readFile())
+
+function parse(raw) {
+  try {
+    return normalizeStore(JSON.parse(raw.text))
+  } catch (error) {
+    // Never replace a store that exists but cannot be read; that would wipe the board.
+    throw new Error(`The saved store could not be parsed: ${error.message}`)
+  }
+}
+
+async function load(depth = 0) {
+  const raw = await readRaw()
   if (!raw) {
     const fresh = createDemoStore()
     try {
       await save(fresh, null)
     } catch (error) {
-      if (!(error instanceof StoreConflict)) throw error
-      return load()
+      if (!(error instanceof StoreConflict) || depth > 1) throw error
     }
-    return { store: fresh, version: useBlob() ? cached?.etag || null : null }
+    return load(depth + 1)
   }
-  let parsed
-  try {
-    parsed = JSON.parse(raw.text)
-  } catch (error) {
-    // Never replace a store that exists but cannot be read; that would wipe the board.
-    throw new Error(`The saved store could not be parsed: ${error.message}`)
-  }
-  const store = normalizeStore(parsed)
-  if (store.needsSave) {
+  const store = parse(raw)
+  // Older stores are upgraded (hashed sessions, generated passwords) on first read.
+  // A failed upgrade write is fine: the next successful save stores it anyway.
+  if (store.needsSave && depth === 0) {
     try {
       await save(store, raw.version)
+      return load(depth + 1)
     } catch (error) {
-      // Another instance migrated it first; reading again picks up their copy.
       if (!(error instanceof StoreConflict)) throw error
     }
-    return load()
   }
-  return { store, version: raw.version }
+  return { store, version: raw.version, text: raw.text }
 }
 
 export async function readStore() {
@@ -118,17 +134,32 @@ export async function readStore() {
 // Runs a change against the latest store and saves it. If someone else saved in
 // between, the change is replayed on their version instead of overwriting it.
 export async function mutate(change) {
+  const started = Date.now()
   for (let attempt = 1; attempt <= ATTEMPTS; attempt += 1) {
-    const { store, version } = await load()
+    const { store, version, text } = await load()
     const result = await change(store)
     try {
       await save(store, version)
       return { store, result }
     } catch (error) {
-      if (!(error instanceof StoreConflict) || attempt === ATTEMPTS) throw error
+      if (!(error instanceof StoreConflict)) throw error
+      const now = await readRaw()
+      if (now && now.text === text && conditionalWrites) {
+        // Nobody else saved, yet the write was refused: the etag spelling is wrong.
+        // Only the writer that used the current spelling moves on to the next one.
+        if (error.style === etagStyle) etagStyle += 1
+        if (etagStyle >= ETAG_STYLES.length) {
+          conditionalWrites = false
+          console.warn('Blob conditional writes are not matching; saving without the etag check.')
+        }
+        continue
+      }
+      if (attempt === ATTEMPTS || Date.now() - started > DEADLINE_MS) {
+        throw new HttpError(503, 'Several people are saving at once. Try again in a moment.')
+      }
       // Random, growing back-off so simultaneous writers spread out instead of colliding again.
       await new Promise((resolve) => setTimeout(resolve, Math.random() * Math.min(1500, 60 * 2 ** attempt)))
     }
   }
-  throw new Error('The store could not be saved.')
+  throw new HttpError(503, 'The board could not be saved. Try again in a moment.')
 }
