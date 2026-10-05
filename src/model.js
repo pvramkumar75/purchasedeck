@@ -87,8 +87,3 @@ export function siblingsOf(lines, line) {
   return [line]
 }
 
-export function payLabel(status) {
-  if (status === 'paid') return 'Paid'
-  if (status === 'partial') return 'Part paid'
-  return 'Unpaid'
-}

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, getToken, setToken } from './api.js'
 import { COMPANIES, pretty, qty } from './model.js'
-import { MiniTrack, PayBadge } from './visuals.jsx'
+import { MiniTrack } from './visuals.jsx'
 
 function Login({ onDone }) {
   const [pin, setPin] = useState('')
@@ -92,8 +92,6 @@ function MilestoneEditor({ line, board, onSaved, onDeleted, onUnauthorized, onBa
         expectedArrivalDate: form.expectedArrivalDate,
         receiptDone: form.receiptMode === 'sap' ? null : form.receiptDone,
         receiptDate: form.receiptDate,
-        paymentStatus: form.paymentStatus,
-        paymentDate: form.paymentDate,
       }
       const result = await api.saveLine(line.id, { ...body, board })
       onSaved(result)
@@ -198,20 +196,6 @@ function MilestoneEditor({ line, board, onSaved, onDeleted, onUnauthorized, onBa
         </div>
       ))}
       {line.dates.sapDelivery && <p className="hint">SAP delivery date {pretty(line.dates.sapDelivery)}</p>}
-      <div className="pay-edit">
-        <span>Payment</span>
-        {['unpaid', 'partial', 'paid'].map((status) => (
-          <button
-            type="button"
-            key={status}
-            className={form.paymentStatus === status ? 'on' : ''}
-            onClick={() => patch({ paymentStatus: status })}
-          >
-            {status === 'paid' ? 'Paid' : status === 'partial' ? 'Part paid' : 'Unpaid'}
-          </button>
-        ))}
-        <input type="date" value={form.paymentDate || ''} onChange={(event) => patch({ paymentDate: event.target.value })} />
-      </div>
       <label className="field">
         Note for indentors
         <textarea rows="2" value={form.remark} onChange={(event) => patch({ remark: event.target.value })} />
@@ -401,7 +385,7 @@ function Desk({ onUnauthorized }) {
             <section className="kpis">
               <article><span>Indents awaiting PO</span><strong>{waiting.length}</strong></article>
               <article><span>POs not received</span><strong>{openPos.length}</strong></article>
-              <article><span>Received, payment open</span><strong>{lines.filter((line) => line.flags.receipt && line.payment.status !== 'paid').length}</strong></article>
+              <article><span>Received at factory</span><strong>{lines.filter((line) => line.flags.receipt).length}</strong></article>
             </section>
             <section className="share-card">
               <div>
@@ -448,7 +432,7 @@ function Desk({ onUnauthorized }) {
                     <table>
                       <thead>
                         <tr>
-                          <th>PO</th><th>Item</th><th>Material</th><th>Supplier</th><th>Open qty</th><th>Unit</th><th>ETA</th><th>Payment</th>
+                          <th>PO</th><th>Item</th><th>Material</th><th>Supplier</th><th>Open qty</th><th>Unit</th><th>ETA</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -461,7 +445,6 @@ function Desk({ onUnauthorized }) {
                             <td>{qty(line.openQty ?? line.orderQty, line.unit)}</td>
                             <td>{line.company}</td>
                             <td>{pretty(line.dates.eta || line.dates.sapDelivery)}</td>
-                            <td><PayBadge status={line.payment.status} /></td>
                           </tr>
                         ))}
                       </tbody>
@@ -493,7 +476,6 @@ function Desk({ onUnauthorized }) {
                     <div>
                       <div className="row-title">
                         <h3>{line.shortText}</h3>
-                        <PayBadge status={line.payment.status} />
                       </div>
                       <p className="meta">{line.material} · {line.company === 'Unassigned' ? `Plant ${line.plant || '—'}` : line.company} · Indent {line.indentNo || '—'} {line.poNumber ? `· PO ${line.poNumber}` : ''}</p>
                       <MiniTrack stages={line.stages} statusLabel={line.statusLabel} />

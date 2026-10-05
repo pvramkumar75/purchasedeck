@@ -196,7 +196,7 @@ h1, h2 { font-family: Fraunces, Georgia, serif; font-weight: 560; }
 .eyebrow { color: var(--green); font-size: 12px; font-weight: 680; letter-spacing: 0.06em; text-transform: uppercase; }
 .lede, .lede-copy { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
 .code { border: 0; background: #f4f6f8; border-radius: 999px; padding: 6px 10px; font-weight: 680; }
-.money { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; margin: 12px 0; }
+.money { display: grid; grid-template-columns: repeat(2, 1fr); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; margin: 12px 0; }
 .money div { padding: 12px; }
 .money div + div { border-left: 1px solid var(--line); }
 .money span, .facts dt { display: block; color: var(--muted); font-size: 12px; }

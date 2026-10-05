@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from './api.js'
 import { COMPANIES, inPeriod, matchFields, pretty, qty, siblingsOf, sortForBoard } from './model.js'
-import { EmptyState, MiniTrack, PayBadge, Timeline, TrackingRail } from './visuals.jsx'
+import { EmptyState, MiniTrack, Timeline, TrackingRail } from './visuals.jsx'
 
 const EMPTY = { q: '', indent: '', item: '', supplier: '', eta: '', etd: '', readiness: '' }
 const PERIODS = [
@@ -123,13 +123,8 @@ function Detail({ line, siblings, go }) {
         <button type="button" className="code" onClick={() => go(`/m/${encodeURIComponent(line.id)}`, { view: 'detail' })}>
           {line.material || 'No code'}
         </button>
-        <PayBadge status={line.payment.status} />
       </p>
       <div className="money">
-        <div>
-          <span>Payment</span>
-          <strong>{line.payment.status === 'paid' ? 'Paid' : line.payment.status === 'partial' ? 'Part paid' : 'Unpaid'}</strong>
-        </div>
         <div>
           <span>Order value</span>
           <strong>{line.orderValue != null ? new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(line.orderValue) : '—'}</strong>
@@ -331,7 +326,6 @@ export default function UserApp({ go, lineId }) {
                   <div>
                     <div className="row-title">
                       <h3>{line.shortText}</h3>
-                      <PayBadge status={line.payment.status} />
                     </div>
                     <p className="meta">
                       <span className="code-inline">{line.material || '—'}</span>

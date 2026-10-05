@@ -1,4 +1,4 @@
-import { payLabel, pretty } from './model.js'
+import { pretty } from './model.js'
 
 export function Truck() {
   return (
@@ -17,10 +17,6 @@ export function Check() {
       <path d="M5 12.5 9.2 17 19 7" fill="none" stroke="white" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
-}
-
-export function PayBadge({ status }) {
-  return <span className={`pay pay-${status || 'unpaid'}`}>{payLabel(status)}</span>
 }
 
 export function MiniTrack({ stages, statusLabel }) {
