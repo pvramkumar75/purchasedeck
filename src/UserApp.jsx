@@ -109,6 +109,9 @@ function Detail({ line, siblings, go, openLine, homePath, onMark }) {
 
   return (
     <article className="detail">
+      <div className="status-bar-top">
+        <TrackingRail stages={line.stages} />
+      </div>
       <div className="detail-top">
         <button type="button" className="btn ghost" onClick={close}>
           All materials
@@ -120,7 +123,6 @@ function Detail({ line, siblings, go, openLine, homePath, onMark }) {
       <div className="status-hero">
         <p className="eyebrow">{line.company}</p>
         <h2>{line.statusLabel}</h2>
-        <TrackingRail stages={line.stages} />
       </div>
       <h3 className="item-name">{line.shortText}</h3>
       <p className="lede">
