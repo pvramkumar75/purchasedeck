@@ -70,11 +70,11 @@ export function SpecialPanel({ line, onMark }) {
       </label>
       <div className="editor-actions">
         <button type="button" className="btn" disabled={busy} onClick={() => run(true, 'item')}>{line.special ? 'Update item' : 'Mark item'}</button>
+        <button type="button" className="btn ghost" disabled={busy || !line.special} onClick={() => run(false, 'item')}>Demark item</button>
         {line.indentNo && <button type="button" className="btn ghost" disabled={busy} onClick={() => run(true, 'indent')}>Mark indent</button>}
+        {line.indentNo && <button type="button" className="btn ghost" disabled={busy || !line.special} onClick={() => run(false, 'indent')}>Demark indent</button>}
         {line.poNumber && <button type="button" className="btn ghost" disabled={busy} onClick={() => run(true, 'po')}>Mark PO</button>}
-        {line.special && <button type="button" className="text-btn" disabled={busy} onClick={() => run(false, 'item')}>Clear item</button>}
-        {line.special && line.indentNo && <button type="button" className="text-btn" disabled={busy} onClick={() => run(false, 'indent')}>Clear indent</button>}
-        {line.special && line.poNumber && <button type="button" className="text-btn" disabled={busy} onClick={() => run(false, 'po')}>Clear PO</button>}
+        {line.poNumber && <button type="button" className="btn ghost" disabled={busy || !line.special} onClick={() => run(false, 'po')}>Demark PO</button>}
       </div>
       {error && <p className="error">{error}</p>}
     </section>
