@@ -19,7 +19,7 @@ import {
   todayISO,
 } from './model.js'
 import { Chips, Icon, Logo, SearchBox, Skeleton, ThemeToggle, Toggle, ago, copyText, useFeedback, useNow, useSlashFocus } from './ui.jsx'
-import { EmptyState, MiniTrack, NoticeBell, SpecialPanel, StackBar, StatusBadge, StatusFilters, ToneKey, TrackingRail } from './visuals.jsx'
+import { EmptyState, MiniTrack, NoticeBell, SpecialPanel, StackBar, StatusBadge, StatusFilters, ToneKey, TrackingRail, TransportLine } from './visuals.jsx'
 
 const TABS = [
   { id: 'overview', label: 'Overview', icon: 'grid' },
@@ -69,7 +69,7 @@ function Login({ onDone }) {
 
 // ---------- milestone editor ----------
 
-const TEXT_KEYS = ['company', 'manualPoNumber', 'manualVendorName', 'remark', 'expectedPoDate']
+const TEXT_KEYS = ['company', 'manualPoNumber', 'manualVendorName', 'remark', 'expectedPoDate', 'transporterName', 'driverPhone', 'lrNumber']
 const STEP_FIELDS = STEPS.flatMap((step) => [`${step.key}Done`, `${step.key}Date`])
 
 function editorState(line) {
@@ -257,23 +257,45 @@ function Editor({ line, onSaved, onClose, onDirty, onRemoved }) {
         {STEPS.map((step) => {
           const sap = step.key === 'orderPlaced' || step.key === 'receipt'
           const mode = step.key === 'orderPlaced' ? 'orderMode' : 'receiptMode'
+          const transportOpen = step.key === 'transit' && (form.transitDone || form.transporterName || form.driverPhone || form.lrNumber)
           return (
-            <div className={`ms-row${form[`${step.key}Done`] ? ' done' : ''}`} key={step.key}>
-              <Toggle checked={Boolean(form[`${step.key}Done`])} onChange={(value) => tick(step.key, value)} label={step.label} />
-              <input type="date" aria-label={`${step.label} date`} value={form[`${step.key}Date`] || ''} onChange={(event) => patch({ [`${step.key}Date`]: event.target.value })} />
-              {sap && (form[mode] === 'sap' ? (
-                <span className="pill-sap" title="Follows SAP until you change it">SAP</span>
-              ) : (
-                <button
-                  type="button"
-                  className="text-btn small"
-                  onClick={() => patch(step.key === 'orderPlaced'
-                    ? { orderMode: 'sap', orderPlacedDone: form.orderPlacedAuto }
-                    : { receiptMode: 'sap', receiptDone: form.receiptAuto })}
-                >
-                  Follow SAP
-                </button>
-              ))}
+            <div className="ms-block" key={step.key}>
+              <div className={`ms-row${form[`${step.key}Done`] ? ' done' : ''}`}>
+                <Toggle checked={Boolean(form[`${step.key}Done`])} onChange={(value) => tick(step.key, value)} label={step.label} />
+                <input type="date" aria-label={`${step.label} date`} value={form[`${step.key}Date`] || ''} onChange={(event) => patch({ [`${step.key}Date`]: event.target.value })} />
+                {sap && (form[mode] === 'sap' ? (
+                  <span className="pill-sap" title="Follows SAP until you change it">SAP</span>
+                ) : (
+                  <button
+                    type="button"
+                    className="text-btn small"
+                    onClick={() => patch(step.key === 'orderPlaced'
+                      ? { orderMode: 'sap', orderPlacedDone: form.orderPlacedAuto }
+                      : { receiptMode: 'sap', receiptDone: form.receiptAuto })}
+                  >
+                    Follow SAP
+                  </button>
+                ))}
+              </div>
+              {transportOpen && (
+                <div className="transport-form">
+                  <p className="transport-title"><Icon name="truck" size={14} /> Transport details <span className="muted">· shown to the plant</span></p>
+                  <div className="form-grid three">
+                    <label className="field">
+                      Transporter name
+                      <input value={form.transporterName || ''} maxLength={120} onChange={(event) => patch({ transporterName: event.target.value })} placeholder="e.g. VRL Logistics" />
+                    </label>
+                    <label className="field">
+                      Driver phone number
+                      <input type="tel" inputMode="tel" value={form.driverPhone || ''} maxLength={20} onChange={(event) => patch({ driverPhone: event.target.value })} placeholder="98xxxxxxxx" />
+                    </label>
+                    <label className="field">
+                      LR No.
+                      <input value={form.lrNumber || ''} maxLength={40} onChange={(event) => patch({ lrNumber: event.target.value })} placeholder="Lorry receipt number" />
+                    </label>
+                  </div>
+                </div>
+              )}
             </div>
           )
         })}
@@ -477,6 +499,7 @@ function LineRow({ line, selected, checked, onOpen, onCheck, onAdvance, busy }) 
           {' · '}{line.poNumber ? `PO ${line.poNumber}` : `Indent ${line.indentNo || '—'}`}
           {line.vendorName ? ` · ${line.vendorName}` : ''}
         </span>
+        {line.transport && line.flags.transit && !line.flags.receipt && <TransportLine transport={line.transport} />}
         <MiniTrack line={line} />
       </button>
       {next && (
@@ -1034,21 +1057,23 @@ function Desk({ onUnauthorized }) {
     try {
       replaceAll(await api.bulk([line.id], stage.key, true, setDate ? today : undefined))
       const followsSap = (stage.key === 'orderPlaced' && line.editor.orderPlacedFollowsSap) || (stage.key === 'receipt' && line.editor.receiptFollowsSap)
-      toast(`${stage.label} ticked · ${line.shortText}`, {
-        action: {
-          label: 'Undo',
-          run: async () => {
-            try {
-              replaceAll(await api.saveLine(line.id, {
-                [`${stage.key}Done`]: followsSap ? null : false,
-                ...(setDate ? { [`${stage.key}Date`]: stage.date || '' } : {}),
-              }))
-              toast('Undone')
-            } catch (err) {
-              fail(err)
-            }
-          },
+      const undo = {
+        label: 'Undo',
+        run: async () => {
+          try {
+            replaceAll(await api.saveLine(line.id, {
+              [`${stage.key}Done`]: followsSap ? null : false,
+              ...(setDate ? { [`${stage.key}Date`]: stage.date || '' } : {}),
+            }))
+            toast('Undone')
+          } catch (err) {
+            fail(err)
+          }
         },
+      }
+      const addTransport = { label: 'Add LR details', run: () => open(line.id) }
+      toast(`${stage.label} ticked · ${line.shortText}`, {
+        actions: stage.key === 'transit' && !line.transport ? [addTransport, undo] : [undo],
       })
     } catch (err) {
       fail(err)

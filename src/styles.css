@@ -466,6 +466,24 @@ button.stack-seg:hover { filter: brightness(1.12); }
 .ms-row input[type="date"] { padding: 6px 8px; font-size: 13px; }
 .ms-row .pill-sap, .ms-row .text-btn { justify-self: end; }
 
+.ms-block { display: grid; gap: 6px; }
+.transport-form {
+  margin: 0 0 4px 18px; padding: 10px 12px 12px; border-radius: 12px;
+  border: 1px dashed color-mix(in srgb, var(--c-waiting) 45%, var(--line));
+  background: color-mix(in srgb, var(--c-waiting) 5%, var(--surface));
+}
+.transport-form .form-grid { margin: 8px 0 0; }
+.transport-title { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 650; color: var(--c-waiting); }
+.transport-title .muted { font-weight: 500; }
+.transport-line { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--c-waiting); }
+.transport-card { border: 1px solid color-mix(in srgb, var(--c-waiting) 35%, var(--line)); background: color-mix(in srgb, var(--c-waiting) 6%, var(--surface)); border-radius: 14px; padding: 11px 13px; margin-bottom: 14px; }
+.transport-card-head { display: flex; align-items: center; gap: 7px; color: var(--c-waiting); margin-bottom: 6px; }
+.transport-card-head strong { color: var(--ink); }
+.transport-card dl { margin: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.transport-card dt { color: var(--muted); font-size: 11.5px; font-weight: 600; }
+.transport-card dd { margin: 2px 0 0; font-weight: 650; overflow-wrap: anywhere; }
+.transport-card a, .tl-transport a { font-weight: 650; }
+.tl-row small.tl-transport { color: var(--c-waiting); font-weight: 600; }
 .save-bar {
   position: sticky; bottom: 12px; z-index: 3; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
   padding: 10px; margin: 16px -6px 0; border-radius: 14px; background: var(--surface); border: 1px solid var(--line);
@@ -653,6 +671,8 @@ button.stack-seg:hover { filter: brightness(1.12); }
   .group-label { width: 100%; margin-top: 4px; }
   .filter-group .chips { flex-basis: 100%; }
   .filter-help dl div { grid-template-columns: 1fr; gap: 2px; }
+  .transport-form { margin-left: 0; }
+  .transport-card dl { grid-template-columns: 1fr 1fr; }
   .sync span { display: none; }
   .sync { padding: 7px; border-radius: 10px; margin-right: 0; }
   .wrap { width: calc(100% - 24px); margin-top: 14px; }

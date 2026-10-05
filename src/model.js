@@ -251,6 +251,8 @@ export function matchesQuery(line, query) {
     line.company,
     line.requisitioner,
     line.plant,
+    line.transport?.transporter,
+    line.transport?.lrNumber,
   ].join(' ').toLowerCase()
   return needle.split(/\s+/).every((word) => blob.includes(word))
 }

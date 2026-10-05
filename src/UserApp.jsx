@@ -20,7 +20,7 @@ import {
   statusTone,
 } from './model.js'
 import { Icon, Logo, SearchBox, Skeleton, ThemeToggle, ago, copyText, useFeedback, useNow, useSlashFocus } from './ui.jsx'
-import { EmptyState, MiniTrack, NoticeBell, SpecialPanel, StackBar, StatusBadge, StatusFilters, Timeline, ToneKey, TrackingRail } from './visuals.jsx'
+import { EmptyState, MiniTrack, NoticeBell, SpecialPanel, StackBar, StatusBadge, StatusFilters, Timeline, ToneKey, TrackingRail, TransportCard, TransportLine } from './visuals.jsx'
 
 const EMPTY = { q: '', indent: '', item: '', supplier: '', ...Object.fromEntries(STEPS.map((step) => [step.key, ''])) }
 
@@ -114,6 +114,7 @@ function Detail({ line, siblings, onClose, openLine, onMark }) {
           </div>
         )}
       </div>
+      {line.transport && <TransportCard transport={line.transport} />}
       {line.remark && <p className="remark"><Icon name="file" size={14} /> <span><strong>Note from purchase:</strong> {line.remark}</span></p>}
       <Timeline line={line} />
       <SpecialPanel line={line} onMark={onMark} />
@@ -412,6 +413,7 @@ export default function UserApp({ go, lineId, plantId }) {
                     {allowed.length > 1 ? ` · ${plantLabel(line.company)}` : ''}
                     {line.vendorName ? ` · ${line.vendorName}` : ''}
                   </span>
+                  {line.transport && line.flags.transit && !line.flags.receipt && <TransportLine transport={line.transport} />}
                   <MiniTrack line={line} />
                 </span>
                 <span className="row-side">

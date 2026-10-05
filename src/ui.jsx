@@ -117,9 +117,10 @@ export function FeedbackProvider({ children }) {
   const toast = useCallback((message, options = {}) => {
     seq.current += 1
     const id = seq.current
-    const item = { id, message, tone: options.tone || 'success', action: options.action }
+    const actions = options.actions || (options.action ? [options.action] : [])
+    const item = { id, message, tone: options.tone || 'success', actions }
     setToasts((list) => [...list.slice(-3), item])
-    setTimeout(() => dismiss(id), options.duration || (options.action ? 6500 : 3800))
+    setTimeout(() => dismiss(id), options.duration || (actions.length ? 7000 : 3800))
     return id
   }, [dismiss])
 
@@ -149,11 +150,11 @@ export function FeedbackProvider({ children }) {
           <div key={item.id} className={`toast ${item.tone}`}>
             <Icon name={item.tone === 'error' ? 'alert' : 'check'} size={16} />
             <span>{item.message}</span>
-            {item.action && (
-              <button type="button" onClick={() => { dismiss(item.id); item.action.run() }}>
-                {item.action.label}
+            {item.actions.map((action) => (
+              <button type="button" key={action.label} onClick={() => { dismiss(item.id); action.run() }}>
+                {action.label}
               </button>
-            )}
+            ))}
             <button type="button" className="toast-x" aria-label="Dismiss" onClick={() => dismiss(item.id)}>
               <Icon name="x" size={14} />
             </button>

@@ -511,6 +511,10 @@ export function decorate(line, plantMap, vendorNames = {}) {
       date: override.paymentDate || null,
     },
     remark: line.remark || '',
+    // Filled in by purchase once the material is in transit; shown to the plant.
+    transport: override.transporterName || override.driverPhone || override.lrNumber
+      ? { transporter: override.transporterName || '', driverPhone: override.driverPhone || '', lrNumber: override.lrNumber || '' }
+      : null,
     sample: Boolean(line.sample),
     manual: Boolean(line.manual),
     special: line.special ? { by: line.special.by || '', note: line.special.note || '', at: line.special.at || '' } : null,
@@ -529,6 +533,9 @@ export function decorate(line, plantMap, vendorNames = {}) {
       readyDate: dates.ready || '',
       transitDone: flags.transit,
       transitDate: dates.transit || '',
+      transporterName: override.transporterName || '',
+      driverPhone: override.driverPhone || '',
+      lrNumber: override.lrNumber || '',
       hyderabadDone: flags.hyderabad,
       hyderabadDate: dates.hyderabad || '',
       receiptDone: flags.receipt,
@@ -588,6 +595,19 @@ export function applyEditor(line, body, plantMap = {}) {
   if ('manualPoNumber' in body) line.manualPoNumber = asId(body.manualPoNumber).slice(0, 40)
   if ('manualVendorName' in body) line.manualVendorName = text(body.manualVendorName).slice(0, 120)
   if ('remark' in body) line.remark = text(body.remark).slice(0, 500)
+  // Transport details live with the milestone edits, so SAP re-uploads and file
+  // removals keep them.
+  const transport = {
+    transporterName: (value) => text(value).slice(0, 120),
+    driverPhone: (value) => text(value).replace(/[^0-9+\-() ]/g, '').replace(/\s+/g, ' ').trim().slice(0, 20),
+    lrNumber: (value) => text(value).slice(0, 40),
+  }
+  for (const [key, clean] of Object.entries(transport)) {
+    if (!(key in body)) continue
+    const value = clean(body[key])
+    if (value) line.override[key] = value
+    else delete line.override[key]
+  }
   if ('company' in body && COMPANIES.includes(body.company) && body.company !== companyOf(line, plantMap)) {
     line.unitOverride = body.company
   }

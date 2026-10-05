@@ -189,6 +189,38 @@ export function TrackingRail({ stages, onToggle }) {
   )
 }
 
+const telHref = (phone) => `tel:${String(phone).replace(/[^0-9+]/g, '')}`
+// LR numbers often already start with 'LR'; don't print it twice.
+const lrText = (lr) => (lr ? (/^lr/i.test(lr) ? lr : `LR ${lr}`) : '')
+
+// One-line summary for lists: who is carrying it and the LR No.
+export function TransportLine({ transport }) {
+  const parts = [transport.transporter, lrText(transport.lrNumber)].filter(Boolean)
+  if (!parts.length) return null
+  return (
+    <span className="transport-line">
+      <Icon name="truck" size={13} /> {parts.join(' · ')}
+    </span>
+  )
+}
+
+// Full details on the item page, with a tap-to-call driver number.
+export function TransportCard({ transport }) {
+  return (
+    <section className="transport-card" aria-label="Transport details">
+      <div className="transport-card-head"><Icon name="truck" size={16} /> <strong>Transport</strong></div>
+      <dl>
+        <div><dt>Transporter</dt><dd>{transport.transporter || '—'}</dd></div>
+        <div><dt>LR No.</dt><dd className="mono">{transport.lrNumber || '—'}</dd></div>
+        <div>
+          <dt>Driver phone</dt>
+          <dd>{transport.driverPhone ? <a href={telHref(transport.driverPhone)}>{transport.driverPhone}</a> : '—'}</dd>
+        </div>
+      </dl>
+    </section>
+  )
+}
+
 export function Timeline({ line }) {
   return (
     <ol className="tl">
@@ -221,6 +253,16 @@ export function Timeline({ line }) {
             <strong>{stage.label}</strong>
             {stage.key === 'orderPlaced' && (
               <small>{line.poNumber ? `PO ${line.poNumber}${line.poItem ? ` / ${line.poItem}` : ''}` : 'PO not yet placed'}</small>
+            )}
+            {stage.key === 'transit' && line.transport && (
+              <small className="tl-transport">
+                {[line.transport.transporter, lrText(line.transport.lrNumber)].filter(Boolean).join(' · ')}
+                {line.transport.driverPhone && (
+                  <>
+                    {line.transport.transporter || line.transport.lrNumber ? ' · ' : ''}Driver <a href={telHref(line.transport.driverPhone)}>{line.transport.driverPhone}</a>
+                  </>
+                )}
+              </small>
             )}
             {stage.current && <small className="now">Current step</small>}
           </div>
