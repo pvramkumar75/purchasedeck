@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, getToken, setToken } from './api.js'
-import { COMPANIES, pretty, qty } from './model.js'
+import { PLANTS, pretty, qty, plantLabel } from './model.js'
 import { MiniTrack } from './visuals.jsx'
 
 function Login({ onDone }) {
@@ -140,13 +140,13 @@ function MilestoneEditor({ line, board, onSaved, onDeleted, onUnauthorized, onBa
       </dl>
       <label className="field">
         Unit
-        <select value={COMPANIES.includes(form.company) ? form.company : ''} onChange={(event) => patch({ company: event.target.value })}>
-          <option value="" disabled>Choose unit</option>
-          {COMPANIES.map((name) => <option key={name}>{name}</option>)}
+        <select value={PLANTS.some((plant) => plant.id === form.company) ? form.company : ''} onChange={(event) => patch({ company: event.target.value })}>
+          <option value="" disabled>Choose plant</option>
+          {PLANTS.map((plant) => <option key={plant.id} value={plant.id}>{plant.label}</option>)}
         </select>
       </label>
-      {!COMPANIES.includes(form.company) && (
-        <p className="hint">Plant {line.plant || 'is missing in the SAP file'}. Choose TPL, TCL-JDM, or TCL-JDCL before saving.</p>
+      {!PLANTS.some((plant) => plant.id === form.company) && (
+        <p className="hint">SAP plant {line.plant || 'is missing'}. Choose TPL, TCL-JDM, TCL-JDCL, or TCL (JDM+JDCL) before saving.</p>
       )}
       {line.sapPoNumber ? (
         <p className="hint">PO {line.sapPoNumber} comes from SAP.</p>
@@ -238,7 +238,7 @@ function AddLine({ onCreated, onUnauthorized }) {
   return (
     <form className="add-line" onSubmit={submit}>
       <div className="filters">
-        <label className="field">Unit<select value={form.company} onChange={set('company')}>{COMPANIES.map((name) => <option key={name}>{name}</option>)}</select></label>
+        <label className="field">Plant<select value={form.company} onChange={set('company')}>{PLANTS.map((plant) => <option key={plant.id} value={plant.id}>{plant.label}</option>)}</select></label>
         <label className="field">Indent<input value={form.indentNo} onChange={set('indentNo')} /></label>
         <label className="field">Item<input value={form.indentItem} onChange={set('indentItem')} /></label>
         <label className="field">Material code<input value={form.material} onChange={set('material')} /></label>
@@ -265,12 +265,15 @@ function Desk({ onUnauthorized }) {
   const [query, setQuery] = useState('')
   const [notice, setNotice] = useState('')
   const [drag, setDrag] = useState(false)
+  const [uploadPlant, setUploadPlant] = useState('')
+  const [passwords, setPasswords] = useState({})
   const [plants, setPlants] = useState([])
 
   const load = () => {
     api.bootstrap().then((next) => {
       setData(next)
       setPlants(Object.entries(next.plantMap).map(([plant, company]) => ({ plant, company })))
+      setPasswords(next.passwords || {})
     }).catch((err) => setError(err.message))
   }
 
@@ -292,14 +295,18 @@ function Desk({ onUnauthorized }) {
   }
 
   const uploadFiles = async (fileList) => {
+    if (!uploadPlant) {
+      setError('Choose the plant before uploading the SAP file.')
+      return
+    }
     setNotice('')
     setError('')
     try {
       let last = null
       for (const file of fileList) {
         const buffer = await file.arrayBuffer()
-        last = await api.uploadBuffer(file.name, buffer)
-        setNotice(`${last.report} · ${last.rows} rows from ${file.name}`)
+        last = await api.uploadBuffer(file.name, buffer, uploadPlant)
+        setNotice(`${last.report} · ${last.rows} rows for ${plantLabel(uploadPlant)} from ${file.name}`)
       }
       if (last) replaceAll(last)
     } catch (err) {
@@ -309,6 +316,10 @@ function Desk({ onUnauthorized }) {
   }
 
   const loadSamples = async () => {
+    if (!uploadPlant) {
+      setError('Choose the plant before loading the sample reports.')
+      return
+    }
     const names = ['ME5A_sample.csv', 'ME2L_sample.csv', 'MB51_sample.csv']
     setNotice('Reading sample reports…')
     try {
@@ -316,7 +327,7 @@ function Desk({ onUnauthorized }) {
       for (const name of names) {
         const response = await fetch(`/samples/${name}`)
         const buffer = await response.arrayBuffer()
-        last = await api.uploadBuffer(name, buffer)
+        last = await api.uploadBuffer(name, buffer, uploadPlant)
       }
       if (last) {
         replaceAll(last)
@@ -342,16 +353,21 @@ function Desk({ onUnauthorized }) {
     }
   }
 
-  const share = async () => {
-    const url = `${window.location.origin}/`
-    if (navigator.share) {
-      try {
-        await navigator.share({ title: 'Material Tracking', url })
-        return
-      } catch { /* copy */ }
-    }
+  const copyLink = async (plantId) => {
+    const url = `${window.location.origin}/p/${encodeURIComponent(plantId)}`
     await navigator.clipboard.writeText(url)
-    setNotice('User link copied.')
+    setNotice(`${plantLabel(plantId)} link copied.`)
+  }
+  const savePasswords = async () => {
+    try {
+      const next = await api.savePasswords(passwords)
+      replaceAll(next)
+      setPasswords(next.passwords || passwords)
+      setNotice('Plant passwords saved.')
+    } catch (err) {
+      if (err.status === 401) onUnauthorized()
+      setError(err.message)
+    }
   }
 
   const logout = async () => {
@@ -387,13 +403,26 @@ function Desk({ onUnauthorized }) {
               <article><span>POs not received</span><strong>{openPos.length}</strong></article>
               <article><span>Received at factory</span><strong>{lines.filter((line) => line.flags.receipt).length}</strong></article>
             </section>
-            <section className="share-card">
-              <div>
-                <h2>Link for indentors</h2>
-                <p>They can open it on a computer or install it on a phone. The link is view only.</p>
-                <code>{typeof window !== 'undefined' ? window.location.origin : ''}/</code>
-              </div>
-              <button type="button" className="btn" onClick={share}>Copy user link</button>
+            <section className="panel plant-links">
+              <h2>Plant links</h2>
+              <p className="lede-copy">Each plant has its own link and password. TCL (JDM+JDCL) sees both JDM and JDCL.</p>
+              {PLANTS.map((plant) => (
+                <div className="plant-row" key={plant.id}>
+                  <div>
+                    <strong>{plant.label}</strong>
+                    <code>{typeof window !== 'undefined' ? `${window.location.origin}/p/${encodeURIComponent(plant.id)}` : `/p/${plant.id}`}</code>
+                  </div>
+                  <label className="field">
+                    Password
+                    <input
+                      value={passwords[plant.id] || ''}
+                      onChange={(event) => setPasswords((current) => ({ ...current, [plant.id]: event.target.value }))}
+                    />
+                  </label>
+                  <button type="button" className="btn ghost" onClick={() => copyLink(plant.id)}>Copy link</button>
+                </div>
+              ))}
+              <button type="button" className="btn" onClick={savePasswords}>Save passwords</button>
             </section>
             <div className="split">
               <section className="panel">
@@ -499,7 +528,20 @@ function Desk({ onUnauthorized }) {
         {tab === 'upload' && (
           <section className="panel">
             <h2>SAP reports</h2>
-            <p className="lede-copy">Drop ME5A, ME2L, or MB51 exports. Column headings can stay as SAP prints them. CSV and Excel both work. The first real upload clears the sample lines.</p>
+            <p className="lede-copy">Choose the plant first. Every row in the file is stored for that plant. CSV and Excel both work. The first real upload clears the sample lines.</p>
+            <div className="plant-pick" role="group" aria-label="Plant for this upload">
+              {PLANTS.map((plant) => (
+                <button
+                  type="button"
+                  key={plant.id}
+                  className={uploadPlant === plant.id ? 'on' : ''}
+                  onClick={() => setUploadPlant(plant.id)}
+                >
+                  {plant.label}
+                </button>
+              ))}
+            </div>
+            {!uploadPlant && <p className="hint">Select TPL, TCL-JDM, TCL-JDCL, or TCL (JDM+JDCL) before choosing a file.</p>}
             <div
               className={drag ? 'drop on' : 'drop'}
               onDragOver={(event) => { event.preventDefault(); setDrag(true) }}
@@ -523,7 +565,7 @@ function Desk({ onUnauthorized }) {
             <ul className="uploads">
               {(data?.uploads || []).length === 0 && <li>No SAP file uploaded yet. The board is showing sample lines.</li>}
               {(data?.uploads || []).map((upload) => (
-                <li key={upload.at}>{upload.report} · {upload.rows} rows · {pretty(upload.at)}</li>
+                <li key={upload.at}>{upload.report} · {upload.rows} rows{upload.plant ? ` · ${plantLabel(upload.plant)}` : ''} · {pretty(upload.at)}</li>
               ))}
             </ul>
             <h3>Plant to unit</h3>
@@ -532,7 +574,7 @@ function Desk({ onUnauthorized }) {
               <div className="ms-row" key={`${row.plant}-${index}`}>
                 <input value={row.plant} onChange={(event) => setPlants((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, plant: event.target.value } : item))} />
                 <select value={row.company} onChange={(event) => setPlants((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, company: event.target.value } : item))}>
-                  {COMPANIES.map((name) => <option key={name}>{name}</option>)}
+                  {PLANTS.map((plant) => <option key={plant.id} value={plant.id}>{plant.label}</option>)}
                 </select>
                 <button type="button" className="text-btn" onClick={() => setPlants((current) => current.filter((_, itemIndex) => itemIndex !== index))}>Remove</button>
               </div>

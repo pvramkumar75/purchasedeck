@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api } from './api.js'
-import { COMPANIES, inPeriod, matchFields, pretty, qty, siblingsOf, sortForBoard } from './model.js'
+import { api, getPlantToken, setPlantToken } from './api.js'
+import { COMPANIES, companiesForPlant, inPeriod, matchFields, plantLabel, pretty, qty, siblingsOf, sortForBoard } from './model.js'
 import { EmptyState, MiniTrack, Timeline, TrackingRail } from './visuals.jsx'
 
 const EMPTY = { q: '', indent: '', item: '', supplier: '', eta: '', etd: '', readiness: '' }
@@ -88,13 +88,13 @@ function PeriodMenu({ days, onChange }) {
   )
 }
 
-function Detail({ line, siblings, go }) {
+function Detail({ line, siblings, go, openLine, homePath }) {
   const close = () => {
     if (window.history.state?.view === 'detail') window.history.back()
-    else go('/')
+    else go(homePath)
   }
   const copy = async () => {
-    const url = `${window.location.origin}/m/${encodeURIComponent(line.id)}`
+    const url = window.location.href
     if (navigator.share) {
       try {
         await navigator.share({ title: line.shortText, url })
@@ -120,7 +120,7 @@ function Detail({ line, siblings, go }) {
       <p className="eyebrow">{line.company}</p>
       <h2>{line.shortText}</h2>
       <p className="lede">
-        <button type="button" className="code" onClick={() => go(`/m/${encodeURIComponent(line.id)}`, { view: 'detail' })}>
+        <button type="button" className="code" onClick={() => openLine(line.id)}>
           {line.material || 'No code'}
         </button>
       </p>
@@ -158,7 +158,7 @@ function Detail({ line, siblings, go }) {
               type="button"
               key={item.id}
               className={item.id === line.id ? 'sib on' : 'sib'}
-              onClick={() => go(`/m/${encodeURIComponent(item.id)}`, { view: 'detail' })}
+              onClick={() => openLine(item.id)}
             >
               <strong>{item.shortText}</strong>
               <span>
@@ -173,62 +173,126 @@ function Detail({ line, siblings, go }) {
   )
 }
 
-export default function UserApp({ go, lineId }) {
+function PlantLock({ plantId, onUnlock }) {
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const known = COMPANIES.includes(plantId)
+  const submit = async (event) => {
+    event.preventDefault()
+    setBusy(true)
+    setError('')
+    try {
+      const result = await api.plantLogin(plantId, password)
+      setPlantToken(plantId, result.token)
+      onUnlock()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="app">
+      <header className="topbar">
+        <a className="brand" href="/">
+          <img src="/favicon.svg" alt="" width="40" height="40" />
+          <span>
+            <strong>{known ? plantLabel(plantId) : 'Material Tracking'}</strong>
+            <small>Plant status</small>
+          </span>
+        </a>
+      </header>
+      <main className="wrap narrow">
+        <form className="login" onSubmit={submit}>
+          <h1>{known ? plantLabel(plantId) : 'Unknown plant'}</h1>
+          <p>{known ? 'Enter the password purchase shared for this plant.' : 'Ask purchase for the correct plant link.'}</p>
+          {known && (
+            <label className="field">
+              Password
+              <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoFocus />
+            </label>
+          )}
+          {error && <p className="error">{error}</p>}
+          {known && <button className="btn" type="submit" disabled={busy}>{busy ? 'Checking…' : 'View materials'}</button>}
+        </form>
+      </main>
+    </div>
+  )
+}
+
+export default function UserApp({ go, lineId, plantId }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
   const [days, setDays] = useState(30)
   const [company, setCompany] = useState('ALL')
   const [fields, setFields] = useState(EMPTY)
+  const [unlocked, setUnlocked] = useState(() => COMPANIES.includes(plantId) && Boolean(getPlantToken(plantId)))
+  const allowed = companiesForPlant(plantId)
+  const homePath = `/p/${encodeURIComponent(plantId)}`
 
   useEffect(() => {
+    setUnlocked(COMPANIES.includes(plantId) && Boolean(getPlantToken(plantId)))
+    setData(null)
+    setCompany('ALL')
+  }, [plantId])
+
+  useEffect(() => {
+    if (!unlocked) return undefined
     let live = true
-    api.bootstrap()
+    api.plantBootstrap(plantId)
       .then((next) => {
         if (live) setData(next)
       })
       .catch((err) => {
-        if (live) setError(err.message)
+        if (!live) return
+        if (err.status === 401) {
+          setPlantToken(plantId, '')
+          setUnlocked(false)
+          return
+        }
+        setError(err.message)
       })
     return () => {
       live = false
     }
-  }, [])
+  }, [plantId, unlocked])
 
   useEffect(() => {
     const selected = data?.lines.find((line) => line.id === lineId)
-    document.title = selected ? `${selected.shortText} · Material Tracking` : 'Material Tracking'
+    document.title = selected ? `${selected.shortText} · ${plantLabel(plantId)}` : `${plantLabel(plantId)} · Material Tracking`
     if (lineId) window.scrollTo(0, 0)
-  }, [lineId, data])
+  }, [lineId, data, plantId])
 
   const filtered = useMemo(() => {
     const lines = data?.lines || []
     return lines.filter((line) => inPeriod(line, days) && matchFields(line, fields))
   }, [data, days, fields])
 
-  const units = useMemo(() => {
-    const names = [...COMPANIES]
-    if (filtered.some((line) => line.company === 'Unassigned')) names.push('Unassigned')
-    return names
-  }, [filtered])
+  const units = allowed
 
   const visible = useMemo(() => {
-    const rows = company === 'ALL' ? filtered : filtered.filter((line) => line.company === company)
+    const scoped = filtered.filter((line) => allowed.includes(line.company))
+    const rows = company === 'ALL' ? scoped : scoped.filter((line) => line.company === company)
     return sortForBoard(rows)
-  }, [filtered, company])
+  }, [filtered, company, allowed])
 
   const selected = data?.lines.find((line) => line.id === lineId) || null
   const siblings = siblingsOf(data?.lines || [], selected)
   const activeFilters = Object.values(fields).some(Boolean)
   const set = (key) => (event) => setFields((current) => ({ ...current, [key]: event.target.value }))
+  const openLine = (id) => go(`${homePath}/m/${encodeURIComponent(id)}`, { view: 'detail' })
+
+  if (!unlocked) return <PlantLock plantId={plantId} onUnlock={() => setUnlocked(true)} />
 
   return (
     <div className="app">
       <header className="topbar">
-        <a className="brand" href="/" onClick={(event) => { event.preventDefault(); go('/') }}>
+        <a className="brand" href={homePath} onClick={(event) => { event.preventDefault(); go(homePath) }}>
           <img src="/favicon.svg" alt="" width="40" height="40" />
           <span>
-            <strong>Material Tracking</strong>
-            <small>Live indent status</small>
+            <strong>{plantLabel(plantId)}</strong>
+            <small>Material status</small>
           </span>
         </a>
         <InstallButton />
@@ -250,7 +314,7 @@ export default function UserApp({ go, lineId }) {
                   onClick={() => setCompany((current) => (current === name ? 'ALL' : name))}
                 >
                   <div className="unit-head">
-                    <strong>{name}</strong>
+                    <strong>{plantLabel(name)}</strong>
                     <span>{stats.total}</span>
                   </div>
                   <ul>
@@ -263,7 +327,7 @@ export default function UserApp({ go, lineId }) {
             })}
           </div>
           <p className="unit-note">
-            {company === 'ALL' ? 'Showing every unit. Tap a card to focus that unit.' : `Showing ${company}. Tap the card again to see every unit.`}
+            {plantId === 'TCL' ? 'This link covers TCL-JDM and TCL-JDCL.' : `This link is only for ${plantLabel(plantId)}.`}
           </p>
           <section className="panel">
             <div className="section-head">
@@ -321,7 +385,7 @@ export default function UserApp({ go, lineId }) {
                   type="button"
                   key={line.id}
                   className={line.id === lineId ? 'row on' : 'row'}
-                  onClick={() => go(`/m/${encodeURIComponent(line.id)}`, { view: 'detail' })}
+                  onClick={() => openLine(line.id)}
                 >
                   <div>
                     <div className="row-title">
@@ -348,7 +412,7 @@ export default function UserApp({ go, lineId }) {
           </section>
         </section>
         {selected && (
-          <Detail line={selected} siblings={siblings} go={go} />
+          <Detail line={selected} siblings={siblings} go={go} openLine={openLine} homePath={homePath} />
         )}
       </main>
       <footer className="foot wrap">

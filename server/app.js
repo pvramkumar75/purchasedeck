@@ -6,9 +6,11 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import {
   COMPANIES,
+  PLANTS,
   applyEditor,
   applyRecords,
   asId,
+  companiesForPlant,
   decorate,
   lineFromView,
   num,
@@ -22,11 +24,26 @@ const PIN = process.env.BUYER_PIN || 'buyer123'
 
 let store = null
 
-function payload() {
-  const lines = store.lines
+function payload(viewer = { buyer: true }) {
+  let lines = store.lines
     .map((line) => decorate(line, store.plantMap, store.vendorNames))
     .sort((a, b) => String(b.requisitionDate || b.poDate || '').localeCompare(String(a.requisitionDate || a.poDate || '')))
-  return { lines, plantMap: store.plantMap, uploads: store.uploads, companies: COMPANIES }
+  const allowed = viewer.plant ? companiesForPlant(viewer.plant) : COMPANIES
+  if (viewer.plant) lines = lines.filter((line) => allowed.includes(line.company))
+  const body = {
+    lines,
+    companies: allowed,
+    plants: PLANTS.filter((plant) => allowed.includes(plant.id)),
+    plant: viewer.plant || null,
+  }
+  if (viewer.buyer) {
+    body.plantMap = store.plantMap
+    body.uploads = store.uploads
+    body.passwords = store.plantPasswords
+    body.plants = PLANTS
+    body.companies = COMPANIES
+  }
+  return body
 }
 
 async function buyer(req, res, next) {
@@ -75,11 +92,60 @@ app.use('/api', (req, res, next) => {
 app.get('/api/bootstrap', async (req, res) => {
   try {
     store = await readStore()
-    res.json(payload())
+    const buyerToken = req.get('x-buyer-token')
+    if (buyerToken && store.sessions.includes(buyerToken)) {
+      res.json(payload({ buyer: true }))
+      return
+    }
+    const plant = store.plantSessions?.[req.get('x-plant-token')]
+    if (!plant || !COMPANIES.includes(plant)) {
+      res.status(401).json({ error: 'Enter the plant password.' })
+      return
+    }
+    res.json(payload({ plant }))
   } catch (error) {
     console.error(error)
     res.status(500).json({ error: 'The material list could not be loaded.' })
   }
+})
+
+app.post('/api/plant-login', async (req, res) => {
+  const plant = req.body?.plant
+  if (!COMPANIES.includes(plant)) {
+    res.status(400).json({ error: 'Choose a plant link from purchase.' })
+    return
+  }
+  try {
+    store = await readStore()
+    if (!safeEqual(req.body?.password || '', store.plantPasswords[plant] || '')) {
+      res.status(401).json({ error: 'That password does not match this plant.' })
+      return
+    }
+    const token = crypto.randomBytes(24).toString('hex')
+    const sessions = Object.entries(store.plantSessions || {}).slice(-80)
+    store.plantSessions = Object.fromEntries(sessions)
+    store.plantSessions[token] = plant
+    await writeStore(store)
+    res.json({ token, plant, label: PLANTS.find((item) => item.id === plant)?.label || plant })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'The plant link could not be opened.' })
+  }
+})
+
+app.post('/api/plant-passwords', buyer, async (req, res) => {
+  const next = {}
+  for (const id of COMPANIES) {
+    const password = String(req.body?.passwords?.[id] || '').trim()
+    if (password.length < 4) {
+      res.status(400).json({ error: 'Each plant password needs at least 4 characters.' })
+      return
+    }
+    next[id] = password
+  }
+  store.plantPasswords = next
+  await writeStore(store)
+  res.json(payload({ buyer: true }))
 })
 
 app.post('/api/login', async (req, res) => {
@@ -114,6 +180,11 @@ app.post('/api/upload', buyer, async (req, res) => {
       res.status(400).json({ error: 'The file was empty.' })
       return
     }
+    const plant = req.body?.plant
+    if (!COMPANIES.includes(plant)) {
+      res.status(400).json({ error: 'Choose the plant before uploading the SAP file.' })
+      return
+    }
     const parsed = parseWorkbook(buffer)
     if (!parsed.report) {
       res.status(400).json({
@@ -121,7 +192,7 @@ app.post('/api/upload', buyer, async (req, res) => {
       })
       return
     }
-    const rows = applyRecords(store, parsed.report, parsed.records)
+    const rows = applyRecords(store, parsed.report, parsed.records, plant)
     await writeStore(store)
     res.json({ report: parsed.report, rows, filename: req.body?.filename || '', ...payload() })
   } catch (error) {
@@ -139,7 +210,7 @@ app.post('/api/lines', buyer, async (req, res) => {
     return
   }
   if (!COMPANIES.includes(body.company)) {
-    res.status(400).json({ error: 'Choose TPL, TCL-JDM, or TCL-JDCL.' })
+    res.status(400).json({ error: 'Choose a plant.' })
     return
   }
   const indentItem = asId(body.indentItem || '10') || '10'

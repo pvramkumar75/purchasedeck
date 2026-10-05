@@ -1,6 +1,23 @@
 import * as xlsx from 'xlsx'
 
-export const COMPANIES = ['TPL', 'TCL-JDM', 'TCL-JDCL']
+export const PLANTS = [
+  { id: 'TPL', label: 'TPL' },
+  { id: 'TCL-JDM', label: 'TCL-JDM' },
+  { id: 'TCL-JDCL', label: 'TCL-JDCL' },
+  { id: 'TCL', label: 'TCL (JDM+JDCL)' },
+]
+export const COMPANIES = PLANTS.map((plant) => plant.id)
+export const DEFAULT_PASSWORDS = {
+  TPL: 'TPL-5104',
+  'TCL-JDM': 'JDM-8261',
+  'TCL-JDCL': 'JDCL-3479',
+  TCL: 'TCL-6928',
+}
+
+export function companiesForPlant(plantId) {
+  if (plantId === 'TCL') return ['TCL-JDM', 'TCL-JDCL', 'TCL']
+  return [plantId]
+}
 
 const DEFAULT_PLANTS = {
   '1100': 'TPL',
@@ -264,7 +281,11 @@ function fill(line, fields) {
   line.updatedAt = new Date().toISOString()
 }
 
-export function applyRecords(store, report, records) {
+export function applyRecords(store, report, records, company) {
+  const tag = (line) => {
+    if (company && COMPANIES.includes(company)) line.companyOverride = company
+    return line
+  }
   if (store.lines.some((line) => line.sample)) {
     store.lines = store.lines.filter((line) => !line.sample)
     store.vendorNames = {}
@@ -274,7 +295,9 @@ export function applyRecords(store, report, records) {
     for (const record of records) {
       if (!record.indentNo && !record.material) continue
       const id = record.indentNo ? `IND-${record.indentNo}-${record.indentItem || '0'}` : `MAT-${record.material}`
-      fill(ensure(store, id), record)
+      const line = ensure(store, id)
+      fill(line, record)
+      tag(line)
       count += 1
     }
   }
@@ -302,6 +325,7 @@ export function applyRecords(store, report, records) {
       }
       const line = ensure(store, id)
       fill(line, record)
+      tag(line)
       if (record.vendor && record.vendorName) store.vendorNames[record.vendor] = record.vendorName
       count += 1
     }
@@ -338,10 +362,11 @@ export function applyRecords(store, report, records) {
       }
       line.sample = false
       line.updatedAt = new Date().toISOString()
+      tag(line)
       count += 1
     }
   }
-  store.uploads.unshift({ report, rows: count, at: new Date().toISOString() })
+  store.uploads.unshift({ report, rows: count, plant: company || '', at: new Date().toISOString() })
   store.uploads = store.uploads.slice(0, 12)
   return count
 }
@@ -567,6 +592,11 @@ export function normalizeStore(store) {
   store.vendorNames ||= {}
   store.uploads ||= []
   store.sessions ||= []
+  store.plantSessions ||= {}
+  store.plantPasswords ||= {}
+  for (const [id, password] of Object.entries(DEFAULT_PASSWORDS)) {
+    if (!store.plantPasswords[id]) store.plantPasswords[id] = password
+  }
   const plantMap = {}
   for (const [plant, company] of Object.entries(store.plantMap || DEFAULT_PLANTS)) {
     if (COMPANIES.includes(company)) plantMap[String(plant)] = company

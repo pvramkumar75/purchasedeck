@@ -90,6 +90,7 @@ h1, h2 { font-family: Fraunces, Georgia, serif; font-weight: 560; }
 .unit[data-co="TPL"] { --accent: #1f7a5a; }
 .unit[data-co="TCL-JDM"] { --accent: #2f6fed; }
 .unit[data-co="TCL-JDCL"] { --accent: #d4892a; }
+.unit[data-co="TCL"] { --accent: #7a4fd4; }
 .unit.on { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, white); }
 .unit-head, .section-head, .row-title, .detail-top, .editor-actions, .result-line {
   display: flex;
@@ -273,7 +274,12 @@ h1, h2 { font-family: Fraunces, Georgia, serif; font-weight: 560; }
 }
 .kpis span { color: var(--muted); font-size: 13px; }
 .kpis strong { display: block; font-family: Fraunces, Georgia, serif; font-size: 40px; margin-top: 4px; }
-.share-card { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 16px; }
+.share-card, .plant-links { margin-bottom: 16px; }
+.plant-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(140px, .7fr) auto; gap: 12px; align-items: end; padding: 12px 0; border-top: 1px solid var(--line, #e6e1d8); }
+.plant-row code { display: block; margin-top: 4px; font-size: 12px; word-break: break-all; }
+.plant-pick { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.plant-pick button { border: 1px solid #ddd6cb; background: #fff; border-radius: 999px; padding: 8px 14px; font: inherit; cursor: pointer; }
+.plant-pick button.on { background: #1f7a5a; color: #fff; border-color: #1f7a5a; }
 .share-card code { display: inline-block; margin-top: 8px; background: #f4f6f8; padding: 6px 8px; border-radius: 8px; }
 .split { display: grid; gap: 18px; }
 .table-wrap { overflow-x: auto; background: white; border-radius: 18px; box-shadow: var(--shadow); }
@@ -328,7 +334,8 @@ tr.click:hover td { background: #f7fbf8; }
 }
 @media (max-width: 900px) {
   .filters, .kpis, .report-cards { grid-template-columns: 1fr 1fr; }
-  .share-card, .foot { flex-direction: column; align-items: flex-start; }
+  .share-card, .foot, .plant-row { flex-direction: column; align-items: flex-start; }
+  .plant-row { grid-template-columns: 1fr; }
 }
 @media (max-width: 800px) {
   .buyer-nav {

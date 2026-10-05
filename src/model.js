@@ -1,4 +1,19 @@
-export const COMPANIES = ['TPL', 'TCL-JDM', 'TCL-JDCL']
+export const PLANTS = [
+  { id: 'TPL', label: 'TPL' },
+  { id: 'TCL-JDM', label: 'TCL-JDM' },
+  { id: 'TCL-JDCL', label: 'TCL-JDCL' },
+  { id: 'TCL', label: 'TCL (JDM+JDCL)' },
+]
+export const COMPANIES = PLANTS.map((plant) => plant.id)
+
+export function plantLabel(id) {
+  return PLANTS.find((plant) => plant.id === id)?.label || id
+}
+
+export function companiesForPlant(plantId) {
+  if (plantId === 'TCL') return ['TCL-JDM', 'TCL-JDCL', 'TCL']
+  return [plantId]
+}
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
