@@ -1,4 +1,85 @@
+import { useEffect, useState } from 'react'
 import { pretty } from './model.js'
+
+const SEEN_KEY = 'mattrack-seen-notice'
+
+function unreadCount(notices) {
+  const seen = localStorage.getItem(SEEN_KEY) || ''
+  return (notices || []).filter((notice) => notice.at > seen).length
+}
+
+export function NoticeBell({ notices, onOpen }) {
+  const [open, setOpen] = useState(false)
+  const [unread, setUnread] = useState(() => unreadCount(notices))
+  useEffect(() => setUnread(unreadCount(notices)), [notices])
+  const toggle = () => {
+    setOpen((value) => !value)
+    localStorage.setItem(SEEN_KEY, new Date().toISOString())
+    setUnread(0)
+  }
+  return (
+    <div className="notice-wrap">
+      <button type="button" className="btn ghost" onClick={toggle}>
+        Special updates{unread > 0 ? ` (${unread})` : ''}
+      </button>
+      {open && (
+        <div className="notice-panel">
+          <strong>Special notifications</strong>
+          {(notices || []).length === 0 && <p>No special updates yet.</p>}
+          {(notices || []).map((notice) => (
+            <button type="button" key={notice.id} className="notice" onClick={() => { setOpen(false); onOpen(notice.lineId) }}>
+              <span>{notice.text}</span>
+              <time>{pretty(notice.at)}</time>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function SpecialPanel({ line, onMark }) {
+  const [note, setNote] = useState(line.special?.note || '')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    setNote(line.special?.note || '')
+    setError('')
+  }, [line.id, line.special?.at, line.special?.note])
+  const run = async (on, scope) => {
+    setBusy(true)
+    setError('')
+    try {
+      await onMark({ on, scope, note })
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <section className="special-box">
+      <div className="section-head">
+        <h3>Special effort</h3>
+        {line.special && <span className="special-badge">Special</span>}
+      </div>
+      <p className="hint">{line.special ? `Marked ${pretty(line.special.at)} by ${line.special.by === 'buyer' ? 'purchase' : 'the plant'}. Updates on this item appear as special notifications.` : 'Mark this when purchase should give it special attention. Both sides see later updates as special notifications.'}</p>
+      <label className="field">
+        Note
+        <input value={note} onChange={(event) => setNote(event.target.value)} placeholder="Why this needs special effort" />
+      </label>
+      <div className="editor-actions">
+        <button type="button" className="btn" disabled={busy} onClick={() => run(true, 'item')}>{line.special ? 'Update item' : 'Mark item'}</button>
+        {line.indentNo && <button type="button" className="btn ghost" disabled={busy} onClick={() => run(true, 'indent')}>Mark indent</button>}
+        {line.poNumber && <button type="button" className="btn ghost" disabled={busy} onClick={() => run(true, 'po')}>Mark PO</button>}
+        {line.special && <button type="button" className="text-btn" disabled={busy} onClick={() => run(false, 'item')}>Clear item</button>}
+        {line.special && line.indentNo && <button type="button" className="text-btn" disabled={busy} onClick={() => run(false, 'indent')}>Clear indent</button>}
+        {line.special && line.poNumber && <button type="button" className="text-btn" disabled={busy} onClick={() => run(false, 'po')}>Clear PO</button>}
+      </div>
+      {error && <p className="error">{error}</p>}
+    </section>
+  )
+}
 
 export function Truck() {
   return (
@@ -61,7 +142,6 @@ export function TrackingRail({ stages }) {
 }
 
 export function Timeline({ line }) {
-  const middle = line.stages.filter((stage) => stage.key !== 'indent')
   return (
     <ol className="tl">
       <li className="tl-row done">
@@ -76,40 +156,16 @@ export function Timeline({ line }) {
         </div>
         <time>{pretty(line.dates.indent)}</time>
       </li>
-      <li className="tl-row progress">
-        <span className="tl-node hollow" />
-        <div className="progress-block">
-          <strong>In progress</strong>
-          <ol className="sub">
-            {middle.map((stage) => (
-              <li key={stage.key} className={stage.current ? 'current' : stage.done ? 'done' : ''}>
-                <span className="sub-node">{stage.current ? <Truck /> : stage.done ? <Check /> : null}</span>
-                <span className="sub-label">{stage.label}</span>
-                <time>{pretty(stage.date)}</time>
-              </li>
-            ))}
-          </ol>
-        </div>
-      </li>
-      <li className="tl-row">
-        <span className="tl-node hollow" />
-        <div>
-          <strong>Expected dispatch</strong>
-          <small>From {line.vendorName || 'supplier to be updated'}</small>
-        </div>
-        <time>{pretty(line.dates.etd)}</time>
-      </li>
-      <li className="tl-row">
-        <span className="tl-node hollow" />
-        <div>
-          <strong>Expected arrival</strong>
-          <small>
-            To {line.company}
-            {line.plant ? ` · Plant ${line.plant}` : ''}
-          </small>
-        </div>
-        <time>{pretty(line.dates.expectedArrival || line.dates.eta || line.dates.sapDelivery)}</time>
-      </li>
+      {line.stages.map((stage) => (
+        <li key={stage.key} className={`tl-row${stage.done ? ' done' : ''}${stage.current ? ' current' : ''}`}>
+          <span className={stage.done ? 'tl-node' : 'tl-node hollow'} />
+          <div>
+            <strong>{stage.label}</strong>
+            {stage.current && <small>Current step</small>}
+          </div>
+          <time>{pretty(stage.date)}</time>
+        </li>
+      ))}
     </ol>
   )
 }

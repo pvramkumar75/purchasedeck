@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, getPlantToken, setPlantToken } from './api.js'
 import { COMPANIES, STATUS_FILTERS, companiesForPlant, inPeriod, matchFields, materialBucket, plantLabel, pretty, qty, siblingsOf, sortForBoard, statusTone } from './model.js'
-import { EmptyState, MiniTrack, Timeline, TrackingRail } from './visuals.jsx'
+import { EmptyState, MiniTrack, NoticeBell, SpecialPanel, Timeline, TrackingRail } from './visuals.jsx'
 
-const EMPTY = { q: '', indent: '', item: '', supplier: '', eta: '', etd: '', readiness: '' }
+const EMPTY = { q: '', indent: '', item: '', supplier: '', orderPlaced: '', ready: '', transit: '', hyderabad: '', receipt: '', unloaded: '' }
 const PERIODS = [
   [30, 'Last 30 days'],
   [90, 'Last 90 days'],
@@ -88,7 +88,7 @@ function PeriodMenu({ days, onChange }) {
   )
 }
 
-function Detail({ line, siblings, go, openLine, homePath }) {
+function Detail({ line, siblings, go, openLine, homePath, onMark }) {
   const close = () => {
     if (window.history.state?.view === 'detail') window.history.back()
     else go(homePath)
@@ -130,10 +130,11 @@ function Detail({ line, siblings, go, openLine, homePath }) {
           <strong>{line.orderValue != null ? new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(line.orderValue) : '—'}</strong>
         </div>
         <div>
-          <span>{line.awaitingPo ? 'Expected PO' : 'Expected arrival'}</span>
-          <strong>{pretty(line.awaitingPo ? line.dates.expectedPo : (line.dates.expectedArrival || line.dates.eta || line.dates.sapDelivery))}</strong>
+          <span>{line.awaitingPo ? 'Expected PO' : 'Hyderabad'}</span>
+          <strong>{pretty(line.awaitingPo ? line.dates.expectedPo : line.dates.hyderabad)}</strong>
         </div>
       </div>
+      <SpecialPanel line={line} onMark={onMark} />
       <TrackingRail stages={line.stages} />
       <Timeline line={line} />
       <dl className="facts">
@@ -261,6 +262,15 @@ export default function UserApp({ go, lineId, plantId }) {
   }, [plantId, unlocked])
 
   useEffect(() => {
+    if (!unlocked) return undefined
+    const timer = setInterval(() => {
+      if (document.visibilityState !== 'visible') return
+      api.plantBootstrap(plantId).then(setData).catch(() => {})
+    }, 45000)
+    return () => clearInterval(timer)
+  }, [plantId, unlocked])
+
+  useEffect(() => {
     const selected = data?.lines.find((line) => line.id === lineId)
     document.title = selected ? `${selected.shortText} · ${plantLabel(plantId)}` : `${plantLabel(plantId)} · Material Tracking`
     if (lineId) window.scrollTo(0, 0)
@@ -274,7 +284,7 @@ export default function UserApp({ go, lineId, plantId }) {
   const units = allowed
 
   const visible = useMemo(() => {
-    const scoped = filtered.filter((line) => allowed.includes(line.company) && (bucket === 'all' || materialBucket(line) === bucket))
+    const scoped = filtered.filter((line) => allowed.includes(line.company) && (bucket === 'all' || (bucket === 'special' ? line.special : materialBucket(line) === bucket)))
     const rows = company === 'ALL' ? scoped : scoped.filter((line) => line.company === company)
     return sortForBoard(rows)
   }, [filtered, company, allowed, bucket])
@@ -297,7 +307,10 @@ export default function UserApp({ go, lineId, plantId }) {
             <small>Material status</small>
           </span>
         </a>
-        <InstallButton />
+        <div className="top-actions">
+          <NoticeBell notices={data?.notices || []} onOpen={openLine} />
+          <InstallButton />
+        </div>
       </header>
       <main className={`wrap shell${selected ? ' has-detail' : ''}`}>
         <section className="list-pane">
@@ -368,16 +381,28 @@ export default function UserApp({ go, lineId, plantId }) {
                 <input value={fields.supplier} onChange={set('supplier')} />
               </label>
               <label className="field">
-                ETA
-                <input type="date" value={fields.eta} onChange={set('eta')} />
+                Order placed
+                <input type="date" value={fields.orderPlaced} onChange={set('orderPlaced')} />
               </label>
               <label className="field">
-                ETD
-                <input type="date" value={fields.etd} onChange={set('etd')} />
+                Ready for dispatch
+                <input type="date" value={fields.ready} onChange={set('ready')} />
               </label>
               <label className="field">
-                Readiness
-                <input type="date" value={fields.readiness} onChange={set('readiness')} />
+                In transit
+                <input type="date" value={fields.transit} onChange={set('transit')} />
+              </label>
+              <label className="field">
+                Arrived at Hyderabad
+                <input type="date" value={fields.hyderabad} onChange={set('hyderabad')} />
+              </label>
+              <label className="field">
+                Received at factory
+                <input type="date" value={fields.receipt} onChange={set('receipt')} />
+              </label>
+              <label className="field">
+                Unloaded
+                <input type="date" value={fields.unloaded} onChange={set('unloaded')} />
               </label>
             </div>
             <div className="result-line">
@@ -400,7 +425,7 @@ export default function UserApp({ go, lineId, plantId }) {
                 <button
                   type="button"
                   key={line.id}
-                  className={`row tone-${statusTone(line)}${line.id === lineId ? ' on' : ''}`}
+                  className={`row tone-${statusTone(line)}${line.special ? ' special' : ''}${line.id === lineId ? ' on' : ''}`}
                   onClick={() => openLine(line.id)}
                 >
                   <div>
@@ -415,12 +440,13 @@ export default function UserApp({ go, lineId, plantId }) {
                       {' · '}
                       {line.company === 'Unassigned' ? `Plant ${line.plant || 'unassigned'}` : line.company}
                       {line.vendorName ? ` · ${line.vendorName}` : ''}
+                      {line.special ? ' · Special' : ''}
                     </p>
                     <MiniTrack stages={line.stages} statusLabel={line.statusLabel} />
                   </div>
                   <div className="row-side">
-                    <span>{line.awaitingPo ? 'Expected PO' : 'ETA'}</span>
-                    <strong>{pretty(line.awaitingPo ? (line.dates.expectedPo || line.dates.eta) : (line.dates.eta || line.dates.expectedArrival || line.dates.sapDelivery))}</strong>
+                    <span>{line.awaitingPo ? 'Expected PO' : 'Hyderabad'}</span>
+                    <strong>{pretty(line.awaitingPo ? line.dates.expectedPo : line.dates.hyderabad)}</strong>
                   </div>
                 </button>
               ))}
@@ -428,7 +454,14 @@ export default function UserApp({ go, lineId, plantId }) {
           </section>
         </section>
         {selected && (
-          <Detail line={selected} siblings={siblings} go={go} openLine={openLine} homePath={homePath} />
+          <Detail
+            line={selected}
+            siblings={siblings}
+            go={go}
+            openLine={openLine}
+            homePath={homePath}
+            onMark={async (body) => setData(await api.markSpecial({ ...body, id: selected.id }, plantId))}
+          />
         )}
       </main>
       <footer className="foot wrap">

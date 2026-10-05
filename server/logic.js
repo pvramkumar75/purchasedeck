@@ -388,6 +388,7 @@ function keptEdits(line) {
     remark: line.remark || '',
     manualPoNumber: line.manualPoNumber || '',
     manualVendorName: line.manualVendorName || '',
+    special: line.special || null,
   }
 }
 
@@ -408,6 +409,52 @@ function rebuildPlant(store, plant) {
     if (saved.remark) line.remark = saved.remark
     if (saved.manualPoNumber) line.manualPoNumber = saved.manualPoNumber
     if (saved.manualVendorName) line.manualVendorName = saved.manualVendorName
+    if (saved.special) line.special = saved.special
+  }
+}
+
+export function companyOf(line, plantMap = {}) {
+  return line.companyOverride || plantMap[String(line.plant || '')] || 'Unassigned'
+}
+
+export function lineLabel(line) {
+  const name = line.shortText || line.material || 'Material'
+  const ref = line.poNumber ? `PO ${line.poNumber}` : line.indentNo ? `indent ${line.indentNo}` : ''
+  return ref ? `${name} (${ref})` : name
+}
+
+export function pushNotice(store, notice) {
+  store.notices ||= []
+  store.notices.unshift({
+    id: crypto.randomBytes(6).toString('hex'),
+    at: new Date().toISOString(),
+    lineId: notice.lineId || '',
+    company: notice.company || '',
+    text: notice.text,
+  })
+  store.notices = store.notices.slice(0, 40)
+}
+
+export function specialSnapshot(line) {
+  return JSON.stringify([line.poNumber, line.openQty, line.orderQty, line.receipts, line.override, line.vendorName, line.poDate])
+}
+
+export function notifyChangedSpecials(store, before) {
+  const changed = store.lines.filter((line) => line.special && before.has(line.id) && before.get(line.id) !== specialSnapshot(line))
+  const groups = new Map()
+  for (const line of changed) {
+    const company = companyOf(line, store.plantMap)
+    if (!groups.has(company)) groups.set(company, [])
+    groups.get(company).push(line)
+  }
+  for (const [company, lines] of groups) {
+    const names = lines.slice(0, 4).map((line) => line.shortText || line.material).join(', ')
+    const extra = lines.length > 4 ? ` and ${lines.length - 4} more` : ''
+    pushNotice(store, {
+      company,
+      lineId: lines[0].id,
+      text: `SAP update on special ${lines.length === 1 ? 'item' : 'items'}: ${names}${extra}.`,
+    })
   }
 }
 
@@ -456,51 +503,45 @@ export function decorate(line, plantMap, vendorNames = {}) {
   const poNumber = line.poNumber || line.manualPoNumber || ''
   const vendorName = line.vendorName || line.manualVendorName || (line.vendor && vendorNames[line.vendor]) || ''
   const override = line.override || {}
-  const poMadeAuto = Boolean(line.poNumber || line.manualPoNumber)
+  const orderAuto = Boolean(line.poNumber || line.manualPoNumber)
   const receiptAuto = autoReceipt(line, poNumber)
+  const flagged = (key, legacy, auto = false) => {
+    if (typeof override[key] === 'boolean') return override[key]
+    if (legacy && typeof override[legacy] === 'boolean') return override[legacy]
+    return auto
+  }
+  const dated = (key, legacy, fallback = null) => override[key] || (legacy && override[legacy]) || fallback || null
   const flags = {
-    indent: true,
-    poMade: typeof override.poMadeDone === 'boolean' ? override.poMadeDone : poMadeAuto,
-    readiness: Boolean(override.readinessDone),
-    etd: Boolean(override.etdDone),
-    eta: Boolean(override.etaDone),
-    expectedArrival: Boolean(override.expectedArrivalDone),
-    receipt: typeof override.receiptDone === 'boolean' ? override.receiptDone : receiptAuto,
+    orderPlaced: flagged('orderPlacedDone', 'poMadeDone', orderAuto),
+    ready: flagged('readyDone', 'readinessDone'),
+    transit: flagged('transitDone', 'etdDone'),
+    hyderabad: flagged('hyderabadDone', typeof override.expectedArrivalDone === 'boolean' ? 'expectedArrivalDone' : 'etaDone'),
+    receipt: flagged('receiptDone', '', receiptAuto),
+    unloaded: flagged('unloadedDone', ''),
   }
   const dates = {
     indent: line.requisitionDate || null,
-    poMade: override.poMadeDate || line.poDate || null,
-    readiness: override.readinessDate || null,
-    etd: override.etdDate || null,
-    eta: override.etaDate || null,
-    expectedArrival: override.expectedArrivalDate || null,
     expectedPo: override.expectedPoDate || null,
-    receipt: override.receiptDate || sapReceipt,
-    payment: override.paymentDate || null,
+    orderPlaced: dated('orderPlacedDate', 'poMadeDate', line.poDate),
+    ready: dated('readyDate', 'readinessDate'),
+    transit: dated('transitDate', 'etdDate'),
+    hyderabad: dated('hyderabadDate', 'expectedArrivalDate', override.etaDate),
+    receipt: dated('receiptDate', '', sapReceipt),
+    unloaded: dated('unloadedDate', ''),
     sapDelivery: line.poDelivery || line.indentDelivery || null,
   }
   const company = line.companyOverride || plantMap[String(line.plant || '')] || 'Unassigned'
-  const awaiting = !poNumber
   const defs = [
-    ['indent', 'Indent raised', 'Indent', true, dates.indent],
-    ['poMade', awaiting ? 'Expected PO' : 'PO made', 'PO made', flags.poMade, awaiting ? dates.expectedPo : dates.poMade],
-    ['readiness', 'Readiness', 'Readiness', flags.readiness, dates.readiness],
-    ['etd', 'ETD', 'ETD', flags.etd, dates.etd],
-    ['eta', 'ETA', 'ETA', flags.eta, dates.eta],
-    ['expectedArrival', 'Expected arrival', 'Arrival', flags.expectedArrival, dates.expectedArrival],
-    ['receipt', 'Receipt at factory', 'Factory', flags.receipt, dates.receipt],
+    ['orderPlaced', 'Order placed', 'Ordered', flags.orderPlaced, dates.orderPlaced],
+    ['ready', 'Ready for dispatch', 'Ready', flags.ready, dates.ready],
+    ['transit', 'In transit', 'Transit', flags.transit, dates.transit],
+    ['hyderabad', 'Arrived at Hyderabad', 'Hyderabad', flags.hyderabad, dates.hyderabad],
+    ['receipt', 'Received at factory', 'Factory', flags.receipt, dates.receipt],
+    ['unloaded', 'Unloaded', 'Unloaded', flags.unloaded, dates.unloaded],
   ]
   const stages = defs.map(([key, label, short, done, date]) => ({ key, label, short, done, date, current: false }))
-  if (flags.receipt) {
-    stages.forEach((stage) => {
-      stage.done = true
-      stage.current = false
-    })
-  } else {
-    const current = stages.find((stage) => !stage.done)
-    if (current) current.current = true
-  }
-  const current = stages.find((stage) => stage.current)
+  const current = stages.find((stage) => !stage.done)
+  if (current) current.current = true
   const orderValue = line.netPrice != null && line.orderQty != null ? Number(line.netPrice) * Number(line.orderQty) : null
   return {
     id: line.id,
@@ -531,7 +572,7 @@ export function decorate(line, plantMap, vendorNames = {}) {
     dates,
     flags,
     stages,
-    statusLabel: flags.receipt ? 'Received at factory' : current?.label || 'Received at factory',
+    statusLabel: current?.label || 'Unloaded',
     awaitingPo: !poNumber,
     undelivered: Boolean(poNumber) && !flags.receipt,
     payment: {
@@ -541,29 +582,30 @@ export function decorate(line, plantMap, vendorNames = {}) {
     remark: line.remark || '',
     sample: Boolean(line.sample),
     manual: Boolean(line.manual),
+    special: line.special ? { by: line.special.by || '', note: line.special.note || '', at: line.special.at || '' } : null,
     updatedAt: line.updatedAt,
     editor: {
       company,
       manualPoNumber: line.manualPoNumber || '',
       manualVendorName: line.manualVendorName || '',
       remark: line.remark || '',
-      poMadeDone: flags.poMade,
-      poMadeAuto,
-      poMadeFollowsSap: typeof override.poMadeDone !== 'boolean',
-      poMadeDate: override.poMadeDate || '',
+      orderPlacedDone: flags.orderPlaced,
+      orderPlacedAuto: orderAuto,
+      orderPlacedFollowsSap: typeof override.orderPlacedDone !== 'boolean' && typeof override.poMadeDone !== 'boolean',
+      orderPlacedDate: dates.orderPlaced || '',
       expectedPoDate: override.expectedPoDate || '',
-      readinessDone: flags.readiness,
-      readinessDate: override.readinessDate || '',
-      etdDone: flags.etd,
-      etdDate: override.etdDate || '',
-      etaDone: flags.eta,
-      etaDate: override.etaDate || '',
-      expectedArrivalDone: flags.expectedArrival,
-      expectedArrivalDate: override.expectedArrivalDate || '',
+      readyDone: flags.ready,
+      readyDate: dates.ready || '',
+      transitDone: flags.transit,
+      transitDate: dates.transit || '',
+      hyderabadDone: flags.hyderabad,
+      hyderabadDate: dates.hyderabad || '',
       receiptDone: flags.receipt,
       receiptAuto,
       receiptFollowsSap: typeof override.receiptDone !== 'boolean',
-      receiptDate: override.receiptDate || '',
+      receiptDate: dates.receipt || '',
+      unloadedDone: flags.unloaded,
+      unloadedDate: dates.unloaded || '',
       paymentStatus: override.paymentStatus || 'unpaid',
       paymentDate: override.paymentDate || '',
     },
@@ -576,13 +618,26 @@ export function applyEditor(line, body) {
     if (value === null) delete override[key]
     else override[key] = Boolean(value)
   }
-  if ('poMadeDone' in body) setOptional('poMadeDone', body.poMadeDone)
-  if ('readinessDone' in body) override.readinessDone = Boolean(body.readinessDone)
-  if ('etdDone' in body) override.etdDone = Boolean(body.etdDone)
-  if ('etaDone' in body) override.etaDone = Boolean(body.etaDone)
-  if ('expectedArrivalDone' in body) override.expectedArrivalDone = Boolean(body.expectedArrivalDone)
+  if ('orderPlacedDone' in body) {
+    setOptional('orderPlacedDone', body.orderPlacedDone)
+    delete override.poMadeDone
+  }
+  if ('readyDone' in body) {
+    override.readyDone = Boolean(body.readyDone)
+    delete override.readinessDone
+  }
+  if ('transitDone' in body) {
+    override.transitDone = Boolean(body.transitDone)
+    delete override.etdDone
+  }
+  if ('hyderabadDone' in body) {
+    override.hyderabadDone = Boolean(body.hyderabadDone)
+    delete override.expectedArrivalDone
+    delete override.etaDone
+  }
   if ('receiptDone' in body) setOptional('receiptDone', body.receiptDone)
-  for (const key of ['poMadeDate', 'expectedPoDate', 'readinessDate', 'etdDate', 'etaDate', 'expectedArrivalDate', 'receiptDate', 'paymentDate']) {
+  if ('unloadedDone' in body) override.unloadedDone = Boolean(body.unloadedDone)
+  for (const key of ['orderPlacedDate', 'expectedPoDate', 'readyDate', 'transitDate', 'hyderabadDate', 'receiptDate', 'unloadedDate', 'paymentDate']) {
     if (!(key in body)) continue
     const iso = body[key] ? toISO(body[key]) : null
     if (iso) override[key] = iso
@@ -611,13 +666,13 @@ export function lineFromView(view) {
     }
   }
   const override = {}
-  if (editor.poMadeFollowsSap === false) override.poMadeDone = Boolean(editor.poMadeDone)
+  if (editor.orderPlacedFollowsSap === false) override.orderPlacedDone = Boolean(editor.orderPlacedDone)
   if (editor.receiptFollowsSap === false) override.receiptDone = Boolean(editor.receiptDone)
-  override.readinessDone = Boolean(editor.readinessDone)
-  override.etdDone = Boolean(editor.etdDone)
-  override.etaDone = Boolean(editor.etaDone)
-  override.expectedArrivalDone = Boolean(editor.expectedArrivalDone)
-  for (const key of ['poMadeDate', 'expectedPoDate', 'readinessDate', 'etdDate', 'etaDate', 'expectedArrivalDate', 'receiptDate', 'paymentDate']) {
+  override.readyDone = Boolean(editor.readyDone)
+  override.transitDone = Boolean(editor.transitDone)
+  override.hyderabadDone = Boolean(editor.hyderabadDone)
+  override.unloadedDone = Boolean(editor.unloadedDone)
+  for (const key of ['orderPlacedDate', 'expectedPoDate', 'readyDate', 'transitDate', 'hyderabadDate', 'receiptDate', 'unloadedDate', 'paymentDate']) {
     if (editor[key]) override[key] = editor[key]
   }
   if (['unpaid', 'partial', 'paid'].includes(editor.paymentStatus)) override.paymentStatus = editor.paymentStatus
@@ -649,6 +704,7 @@ export function lineFromView(view) {
     override,
     receipts,
     manual: Boolean(view.manual),
+    special: view.special?.at ? { by: view.special.by || '', note: view.special.note || '', at: view.special.at } : null,
     sample: false,
     createdAt: view.updatedAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -665,6 +721,7 @@ export function normalizeStore(store) {
   store.sessions ||= []
   store.plantSessions ||= {}
   store.plantPasswords ||= {}
+  store.notices ||= []
   for (const [id, password] of Object.entries(DEFAULT_PASSWORDS)) {
     if (!store.plantPasswords[id]) store.plantPasswords[id] = password
   }

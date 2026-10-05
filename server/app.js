@@ -10,7 +10,12 @@ import {
   applyEditor,
   applyRecords,
   clearPlantUploads,
+  companyOf,
+  lineLabel,
+  notifyChangedSpecials,
+  pushNotice,
   removeUpload,
+  specialSnapshot,
   asId,
   companiesForPlant,
   decorate,
@@ -37,6 +42,7 @@ function payload(viewer = { buyer: true }) {
     companies: allowed,
     plants: PLANTS.filter((plant) => allowed.includes(plant.id)),
     plant: viewer.plant || null,
+    notices: (store.notices || []).filter((notice) => !viewer.plant || allowed.includes(notice.company)),
   }
   if (viewer.buyer) {
     body.plantMap = store.plantMap
@@ -194,7 +200,9 @@ app.post('/api/upload', buyer, async (req, res) => {
       })
       return
     }
+    const before = new Map(store.lines.filter((line) => line.special).map((line) => [line.id, specialSnapshot(line)]))
     const rows = applyRecords(store, parsed.report, parsed.records, plant, { filename: req.body?.filename || '' })
+    notifyChangedSpecials(store, before)
     await writeStore(store)
     res.json({ report: parsed.report, rows, filename: req.body?.filename || '', ...payload() })
   } catch (error) {
@@ -270,6 +278,57 @@ app.delete('/api/lines/:id', buyer, async (req, res) => {
   res.json(payload())
 })
 
+app.post('/api/special', async (req, res) => {
+  try {
+    store = await readStore()
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'The material list could not be loaded.' })
+    return
+  }
+  const buyerToken = req.get('x-buyer-token')
+  const buyerOk = buyerToken && store.sessions.includes(buyerToken)
+  const plant = store.plantSessions?.[req.get('x-plant-token')]
+  if (!buyerOk && (!plant || !COMPANIES.includes(plant))) {
+    res.status(401).json({ error: 'Sign in before marking a special item.' })
+    return
+  }
+  const origin = store.lines.find((item) => item.id === req.body?.id)
+  if (!origin) {
+    res.status(404).json({ error: 'That material is no longer on the board.' })
+    return
+  }
+  const allowed = buyerOk ? COMPANIES : companiesForPlant(plant)
+  const scope = req.body?.scope === 'indent' || req.body?.scope === 'po' ? req.body.scope : 'item'
+  let targets = [origin]
+  if (scope === 'indent' && origin.indentNo) targets = store.lines.filter((item) => item.indentNo === origin.indentNo)
+  if (scope === 'po') {
+    const po = origin.poNumber || origin.manualPoNumber
+    if (po) targets = store.lines.filter((item) => (item.poNumber || item.manualPoNumber) === po)
+  }
+  targets = targets.filter((item) => allowed.includes(companyOf(item, store.plantMap)))
+  if (!targets.length) {
+    res.status(403).json({ error: 'That item is outside this plant.' })
+    return
+  }
+  const on = Boolean(req.body?.on)
+  const note = String(req.body?.note || '').trim().slice(0, 240)
+  const by = buyerOk ? 'buyer' : 'plant'
+  const at = new Date().toISOString()
+  for (const item of targets) item.special = on ? { by, note, at } : null
+  const who = by === 'buyer' ? 'Purchase' : 'The plant'
+  const label = targets.length > 1
+    ? `${targets.length} items on ${scope === 'po' ? `PO ${origin.poNumber || origin.manualPoNumber}` : `indent ${origin.indentNo}`}`
+    : lineLabel(origin)
+  pushNotice(store, {
+    lineId: origin.id,
+    company: companyOf(origin, store.plantMap),
+    text: `${who} ${on ? 'asked for special effort on' : 'cleared special effort on'} ${label}.${note ? ` ${note}` : ''}`,
+  })
+  await writeStore(store)
+  res.json(payload(buyerOk ? { buyer: true } : { plant }))
+})
+
 app.post('/api/save', buyer, async (req, res) => {
   try {
     if (Array.isArray(req.body?.board) && req.body.board.length) {
@@ -284,6 +343,13 @@ app.post('/api/save', buyer, async (req, res) => {
       return
     }
     applyEditor(line, req.body || {})
+    if (line.special) {
+      pushNotice(store, {
+        lineId: line.id,
+        company: companyOf(line, store.plantMap),
+        text: `Purchase updated ${lineLabel(line)}.`,
+      })
+    }
     await writeStore(store)
     res.json({ line: decorate(line, store.plantMap, store.vendorNames), ...payload() })
   } catch (error) {

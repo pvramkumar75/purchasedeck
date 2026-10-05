@@ -84,6 +84,7 @@ export const STATUS_FILTERS = [
   { id: 'indent', label: 'Indents not converted to PO' },
   { id: 'open', label: 'PO made, material not received' },
   { id: 'partial', label: 'PO made, partial material received' },
+  { id: 'special', label: 'Special effort' },
 ]
 
 export function inPeriod(line, days) {
@@ -107,9 +108,12 @@ export function matchFields(line, fields) {
     const supplierOk = includes(line.vendorName, fields.supplier) || includes(line.vendor, fields.supplier)
     if (!supplierOk) return false
   }
-  if (!sameDay(line.dates?.eta, fields.eta)) return false
-  if (!sameDay(line.dates?.etd, fields.etd)) return false
-  if (!sameDay(line.dates?.readiness, fields.readiness)) return false
+  if (!sameDay(line.dates?.orderPlaced, fields.orderPlaced)) return false
+  if (!sameDay(line.dates?.ready, fields.ready)) return false
+  if (!sameDay(line.dates?.transit, fields.transit)) return false
+  if (!sameDay(line.dates?.hyderabad, fields.hyderabad)) return false
+  if (!sameDay(line.dates?.receipt, fields.receipt)) return false
+  if (!sameDay(line.dates?.unloaded, fields.unloaded)) return false
   if (fields.q) {
     const blob = [
       line.indentNo,
@@ -130,8 +134,10 @@ export function matchFields(line, fields) {
 
 export function sortForBoard(lines) {
   return [...lines].sort((a, b) => {
-    const aDate = a.dates?.eta || a.dates?.expectedArrival || a.dates?.sapDelivery || '9999-99-99'
-    const bDate = b.dates?.eta || b.dates?.expectedArrival || b.dates?.sapDelivery || '9999-99-99'
+    const special = Number(Boolean(b.special)) - Number(Boolean(a.special))
+    if (special) return special
+    const aDate = a.dates?.hyderabad || a.dates?.receipt || a.dates?.orderPlaced || '9999-99-99'
+    const bDate = b.dates?.hyderabad || b.dates?.receipt || b.dates?.orderPlaced || '9999-99-99'
     return aDate.localeCompare(bDate) || String(a.indentNo).localeCompare(String(b.indentNo)) || String(a.indentItem).localeCompare(String(b.indentItem), undefined, { numeric: true })
   })
 }

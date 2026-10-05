@@ -1,4 +1,4 @@
-const CACHE = 'mattrack-v6'
+const CACHE = 'mattrack-v8'
 
 self.addEventListener('install', (event) => {
   self.skipWaiting()

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, getToken, setToken } from './api.js'
 import { PLANTS, STATUS_FILTERS, materialBucket, pretty, qty, plantLabel, statusTone } from './model.js'
-import { MiniTrack } from './visuals.jsx'
+import { MiniTrack, NoticeBell, SpecialPanel } from './visuals.jsx'
 
 function Login({ onDone }) {
   const [pin, setPin] = useState('')
@@ -52,7 +52,7 @@ function Login({ onDone }) {
 function editorState(line) {
   return {
     ...line.editor,
-    poMadeMode: line.editor.poMadeFollowsSap ? 'sap' : 'manual',
+    orderMode: line.editor.orderPlacedFollowsSap ? 'sap' : 'manual',
     receiptMode: line.editor.receiptFollowsSap ? 'sap' : 'manual',
   }
 }
@@ -80,19 +80,19 @@ function MilestoneEditor({ line, board, onSaved, onDeleted, onUnauthorized, onBa
         manualPoNumber: form.manualPoNumber,
         manualVendorName: form.manualVendorName,
         remark: form.remark,
-        poMadeDone: form.poMadeMode === 'sap' ? null : form.poMadeDone,
-        poMadeDate: form.poMadeDate,
+        orderPlacedDone: form.orderMode === 'sap' ? null : form.orderPlacedDone,
+        orderPlacedDate: form.orderPlacedDate,
         expectedPoDate: form.expectedPoDate,
-        readinessDone: form.readinessDone,
-        readinessDate: form.readinessDate,
-        etdDone: form.etdDone,
-        etdDate: form.etdDate,
-        etaDone: form.etaDone,
-        etaDate: form.etaDate,
-        expectedArrivalDone: form.expectedArrivalDone,
-        expectedArrivalDate: form.expectedArrivalDate,
+        readyDone: form.readyDone,
+        readyDate: form.readyDate,
+        transitDone: form.transitDone,
+        transitDate: form.transitDate,
+        hyderabadDone: form.hyderabadDone,
+        hyderabadDate: form.hyderabadDate,
         receiptDone: form.receiptMode === 'sap' ? null : form.receiptDone,
         receiptDate: form.receiptDate,
+        unloadedDone: form.unloadedDone,
+        unloadedDate: form.unloadedDate,
       }
       const result = await api.saveLine(line.id, { ...body, board })
       onSaved(result)
@@ -119,12 +119,12 @@ function MilestoneEditor({ line, board, onSaved, onDeleted, onUnauthorized, onBa
   }
 
   const rows = [
-    ['poMade', 'PO made', 'poMadeDone', 'poMadeDate', true],
-    ['readiness', 'Readiness', 'readinessDone', 'readinessDate', false],
-    ['etd', 'ETD', 'etdDone', 'etdDate', false],
-    ['eta', 'ETA', 'etaDone', 'etaDate', false],
-    ['expectedArrival', 'Expected arrival', 'expectedArrivalDone', 'expectedArrivalDate', false],
-    ['receipt', 'Receipt at factory', 'receiptDone', 'receiptDate', true],
+    ['orderPlaced', 'Order placed', 'orderPlacedDone', 'orderPlacedDate', true],
+    ['ready', 'Ready for dispatch', 'readyDone', 'readyDate', false],
+    ['transit', 'In transit', 'transitDone', 'transitDate', false],
+    ['hyderabad', 'Arrived at Hyderabad', 'hyderabadDone', 'hyderabadDate', false],
+    ['receipt', 'Received at factory', 'receiptDone', 'receiptDate', true],
+    ['unloaded', 'Unloaded', 'unloadedDone', 'unloadedDate', false],
   ]
 
   return (
@@ -162,7 +162,7 @@ function MilestoneEditor({ line, board, onSaved, onDeleted, onUnauthorized, onBa
           PO number, if already known
           <input
             value={form.manualPoNumber}
-            onChange={(event) => patch({ manualPoNumber: event.target.value, poMadeDone: true, poMadeMode: 'manual' })}
+            onChange={(event) => patch({ manualPoNumber: event.target.value, orderPlacedDone: true, orderMode: 'manual' })}
           />
         </label>
       )}
@@ -175,8 +175,10 @@ function MilestoneEditor({ line, board, onSaved, onDeleted, onUnauthorized, onBa
         </label>
       )}
       {line.awaitingPo && (
-        <p className="hint">Until the PO is in SAP, the expected PO date, supplier, readiness, ETD, ETA, and arrival below are tentative and show on the plant link.</p>
+        <p className="hint">Dates are optional. Until the PO is in SAP, the expected PO date and the steps below are tentative and show on the plant link.</p>
       )}
+      <SpecialPanel line={line} onMark={async (body) => onSaved(await api.markSpecial({ ...body, id: line.id }))} />
+      <p className="hint">Tick a step when it happens. The date can be left blank.</p>
       {rows.map(([key, label, doneKey, dateKey, sap]) => (
         <div className="ms-row" key={key}>
           <label className="check">
@@ -185,19 +187,19 @@ function MilestoneEditor({ line, board, onSaved, onDeleted, onUnauthorized, onBa
               checked={Boolean(form[doneKey])}
               onChange={(event) => patch({
                 [doneKey]: event.target.checked,
-                ...(key === 'poMade' ? { poMadeMode: 'manual' } : {}),
+                ...(key === 'orderPlaced' ? { orderMode: 'manual' } : {}),
                 ...(key === 'receipt' ? { receiptMode: 'manual' } : {}),
               })}
             />
             <span>{label}</span>
           </label>
           <input type="date" value={form[dateKey] || ''} onChange={(event) => patch({ [dateKey]: event.target.value })} />
-          {sap && form[key === 'poMade' ? 'poMadeMode' : 'receiptMode'] === 'manual' && (
+          {sap && form[key === 'orderPlaced' ? 'orderMode' : 'receiptMode'] === 'manual' && (
             <button
               type="button"
               className="text-btn"
-              onClick={() => patch(key === 'poMade'
-                ? { poMadeMode: 'sap', poMadeDone: form.poMadeAuto }
+              onClick={() => patch(key === 'orderPlaced'
+                ? { orderMode: 'sap', orderPlacedDone: form.orderPlacedAuto }
                 : { receiptMode: 'sap', receiptDone: form.receiptAuto })}
             >
               Follow SAP
@@ -289,6 +291,12 @@ function Desk({ onUnauthorized }) {
   }
 
   useEffect(() => { load() }, [])
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') load()
+    }, 45000)
+    return () => clearInterval(timer)
+  }, [])
 
   const lines = data?.lines || []
   const waiting = lines.filter((line) => line.awaitingPo)
@@ -297,10 +305,11 @@ function Desk({ onUnauthorized }) {
   const worklist = useMemo(() => {
     const needle = query.trim().toLowerCase()
     return lines.filter((line) => {
-      if (bucket !== 'all' && materialBucket(line) !== bucket) return false
+      if (bucket === 'special' && !line.special) return false
+      if (bucket !== 'all' && bucket !== 'special' && materialBucket(line) !== bucket) return false
       if (!needle) return true
       return [line.indentNo, line.material, line.shortText, line.vendorName, line.poNumber, line.company].join(' ').toLowerCase().includes(needle)
-    })
+    }).sort((a, b) => Number(Boolean(b.special)) - Number(Boolean(a.special)))
   }, [lines, query, bucket])
 
   const replaceAll = (next) => {
@@ -429,7 +438,13 @@ function Desk({ onUnauthorized }) {
             <small>Update status for indentors</small>
           </span>
         </a>
-        <button type="button" className="btn ghost" onClick={logout}>Sign out</button>
+        <div className="top-actions">
+          <NoticeBell
+            notices={data?.notices || []}
+            onOpen={(id) => { setEditId(id); setTab('edit') }}
+          />
+          <button type="button" className="btn ghost" onClick={logout}>Sign out</button>
+        </div>
       </header>
       <nav className="buyer-nav">
         <button type="button" className={tab === 'home' ? 'on' : ''} onClick={() => setTab('home')}>Dashboard</button>
@@ -470,13 +485,13 @@ function Desk({ onUnauthorized }) {
             <div className="split">
               <section className="panel">
                 <div className="section-head"><h2>Indents not converted to PO</h2><span>{waiting.length}</span></div>
-                <p className="hint">Open a line to set the expected PO date and tentative supplier, readiness, ETD, ETA, and arrival. Indentors see those dates on the plant link.</p>
+                <p className="hint">Open a line to set the expected PO date. Milestone dates are optional and show on the plant link.</p>
                 {waiting.length === 0 ? <p className="muted">Every indent in this view has a PO.</p> : (
                   <div className="table-wrap">
                     <table>
                       <thead>
                         <tr>
-                          <th>Indent</th><th>Item</th><th>Material</th><th>Description</th><th>Qty</th><th>Unit</th><th>Expected PO</th><th>Supplier</th><th>Readiness</th><th>ETD</th><th>ETA</th><th>Arrival</th><th>By</th>
+                          <th>Indent</th><th>Item</th><th>Material</th><th>Description</th><th>Qty</th><th>Unit</th><th>Expected PO</th><th>Supplier</th><th>Ready</th><th>Transit</th><th>Hyderabad</th><th>Factory</th><th>By</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -490,10 +505,10 @@ function Desk({ onUnauthorized }) {
                             <td>{line.company}</td>
                             <td>{pretty(line.dates.expectedPo)}</td>
                             <td>{line.vendorName || '—'}</td>
-                            <td>{pretty(line.dates.readiness)}</td>
-                            <td>{pretty(line.dates.etd)}</td>
-                            <td>{pretty(line.dates.eta)}</td>
-                            <td>{pretty(line.dates.expectedArrival)}</td>
+                            <td>{pretty(line.dates.ready)}</td>
+                            <td>{pretty(line.dates.transit)}</td>
+                            <td>{pretty(line.dates.hyderabad)}</td>
+                            <td>{pretty(line.dates.receipt)}</td>
                             <td>{line.requisitioner || '—'}</td>
                           </tr>
                         ))}
@@ -521,7 +536,7 @@ function Desk({ onUnauthorized }) {
                             <td>{line.vendorName || '—'}</td>
                             <td>{qty(line.openQty ?? line.orderQty, line.unit)}</td>
                             <td>{line.company}</td>
-                            <td>{pretty(line.dates.eta || line.dates.sapDelivery)}</td>
+                            <td>{pretty(line.dates.hyderabad || line.dates.receipt)}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -563,12 +578,12 @@ function Desk({ onUnauthorized }) {
               </label>
               <div className="rows">
                 {worklist.map((line) => (
-                  <button type="button" key={line.id} className={`row tone-${statusTone(line)}${line.id === editId ? ' on' : ''}`} onClick={() => setEditId(line.id)}>
+                  <button type="button" key={line.id} className={`row tone-${statusTone(line)}${line.special ? ' special' : ''}${line.id === editId ? ' on' : ''}`} onClick={() => setEditId(line.id)}>
                     <div>
                       <div className="row-title">
                         <h3>{line.shortText}</h3>
                       </div>
-                      <p className="meta">{line.material} · {line.company === 'Unassigned' ? `Plant ${line.plant || '—'}` : line.company} · Indent {line.indentNo || '—'} {line.poNumber ? `· PO ${line.poNumber}` : ''}</p>
+                      <p className="meta">{line.special ? 'Special · ' : ''}{line.material} · {line.company === 'Unassigned' ? `Plant ${line.plant || '—'}` : line.company} · Indent {line.indentNo || '—'} {line.poNumber ? `· PO ${line.poNumber}` : ''}</p>
                       <MiniTrack stages={line.stages} statusLabel={line.statusLabel} />
                     </div>
                   </button>

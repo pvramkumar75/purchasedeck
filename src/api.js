@@ -56,6 +56,7 @@ export const api = {
   savePlantMap: (plantMap) => request('/api/plant-map', { method: 'PUT', body: JSON.stringify({ plantMap }) }),
   removeUpload: (id) => request('/api/upload-remove', { method: 'POST', body: JSON.stringify({ id }) }),
   clearUploads: (plant) => request('/api/upload-clear', { method: 'POST', body: JSON.stringify({ plant }) }),
+  markSpecial: (body, plantId) => request('/api/special', { method: 'POST', body: JSON.stringify(body) }, plantId ? { buyer: false, plantId } : { buyer: true }),
   uploadBuffer: (filename, buffer, plant) => {
     const bytes = new Uint8Array(buffer)
     let binary = ''
