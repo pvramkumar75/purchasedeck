@@ -8,11 +8,26 @@ export const PLANTS = [
   { id: 'TCL', label: 'TCL (JDM+JDCL)' },
 ]
 export const COMPANIES = PLANTS.map((plant) => plant.id)
-export const DEFAULT_PASSWORDS = {
-  TPL: 'TPL-5104',
-  'TCL-JDM': 'JDM-8261',
-  'TCL-JDCL': 'JDCL-3479',
-  TCL: 'TCL-6928',
+export const STEP_KEYS = ['orderPlaced', 'ready', 'transit', 'hyderabad', 'receipt', 'unloaded']
+// Passwords that shipped in earlier public builds. Still accepted if a store holds them,
+// but the purchase desk warns until they are replaced.
+const PUBLISHED_PASSWORDS = new Set(['TPL-5104', 'JDM-8261', 'JDCL-3479', 'TCL-6928'])
+const KEEP_FILES_PER_PLANT = 12
+const PASSWORD_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+
+export function randomPassword(prefix = '') {
+  const bytes = crypto.randomBytes(8)
+  let out = ''
+  for (const byte of bytes) out += PASSWORD_ALPHABET[byte % PASSWORD_ALPHABET.length]
+  return `${prefix ? `${prefix}-` : ''}${out.slice(0, 4)}-${out.slice(4)}`
+}
+
+export function isPublishedPassword(value) {
+  return PUBLISHED_PASSWORDS.has(String(value || ''))
+}
+
+export function hashToken(token) {
+  return crypto.createHash('sha256').update(String(token)).digest('hex')
 }
 
 export function companiesForPlant(plantId) {
@@ -35,10 +50,13 @@ export function norm(value) {
 
 export function asId(value) {
   if (value == null || value === '') return ''
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return Number.isInteger(value) ? String(value) : String(value)
-  }
   return String(value).trim()
+}
+
+// SAP prints item numbers as 10 or 00010 depending on the report and export format.
+export function asItem(value) {
+  const id = asId(value)
+  return /^\d+$/.test(id) ? id.replace(/^0+(?=\d)/, '') : id
 }
 
 export function num(value) {
@@ -67,12 +85,16 @@ export function toISO(value) {
     return dt.toISOString().slice(0, 10)
   }
   const raw = String(value).trim()
-  let match = raw.match(/^(\d{4})-(\d{2})-(\d{2})/)
-  if (match) return `${match[1]}-${match[2]}-${match[3]}`
-  match = raw.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})/)
-  if (match) {
-    return `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`
+  const build = (y, m, d) => {
+    const month = Number(m)
+    const day = Number(d)
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null
+    return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
   }
+  let match = raw.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/)
+  if (match) return build(match[1], match[2], match[3])
+  match = raw.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})/)
+  if (match) return build(match[3], match[2], match[1])
   return null
 }
 
@@ -104,7 +126,7 @@ function mapMe5a(row) {
   if (!indentNo && !material) return null
   return {
     indentNo,
-    indentItem: asId(val(row, ['item'])) || '0',
+    indentItem: asItem(val(row, ['item'])) || '0',
     material,
     shortText: text(val(row, ['short text', 'material description', 'description'])),
     quantity: num(val(row, ['quantity'])),
@@ -124,12 +146,12 @@ function mapMe2l(row) {
   const indentNo = asId(val(row, ['purchase requisition']))
   const material = asId(val(row, ['material']))
   if (!poNumber && !indentNo && !material) return null
-  const indentItem = asId(val(row, ['item of requisition', 'requisition item']))
+  const indentItem = asItem(val(row, ['item of requisition', 'requisition item']))
   return {
     vendor: asId(val(row, ['vendor'])),
     vendorName: text(val(row, ['name 1', 'vendor name', 'supplier name'])),
     poNumber,
-    poItem: asId(val(row, ['item'])) || '0',
+    poItem: asItem(val(row, ['item'])) || '0',
     material,
     shortText: text(val(row, ['short text', 'material description'])),
     orderQty: num(val(row, ['order quantity'])),
@@ -155,7 +177,7 @@ function mapMb51(row) {
     postingDate: toISO(val(row, ['posting date'])),
     quantity: num(val(row, ['quantity'])),
     poNumber: asId(val(row, ['purchase order', 'purchasing document'])),
-    poItem: asId(val(row, ['item'])),
+    poItem: asItem(val(row, ['item'])),
     vendor: asId(val(row, ['vendor'])),
   }
 }
@@ -196,13 +218,33 @@ export function parseMatrix(matrix) {
   return { report, records, headers }
 }
 
+function pickDelimiter(source) {
+  // SAP "Spreadsheet" exports are tab separated and often start with title lines,
+  // so look at the first few lines rather than only the first.
+  const sample = source.split(/\r?\n/, 12).join('\n')
+  const counts = [
+    ['\t', (sample.match(/\t/g) || []).length],
+    [';', (sample.match(/;/g) || []).length],
+    [',', (sample.match(/,/g) || []).length],
+  ]
+  if (counts[0][1] > 0) return '\t'
+  return counts[1][1] > counts[2][1] ? ';' : ','
+}
+
+export function decodeText(buffer) {
+  if (buffer[0] === 0xff && buffer[1] === 0xfe) return buffer.subarray(2).toString('utf16le')
+  if (buffer[0] === 0xfe && buffer[1] === 0xff) {
+    const body = buffer.subarray(2)
+    const swapped = Buffer.from(body.subarray(0, body.length - (body.length % 2)))
+    swapped.swap16()
+    return swapped.toString('utf16le')
+  }
+  return buffer.toString('utf8').replace(/^\uFEFF/, '')
+}
+
 function parseDelimited(text) {
   const source = text.replace(/^\uFEFF/, '')
-  const headerEnd = source.search(/\r?\n/)
-  const header = headerEnd === -1 ? source : source.slice(0, headerEnd)
-  const commas = (header.match(/,/g) || []).length
-  const semis = (header.match(/;/g) || []).length
-  const delimiter = semis > commas ? ';' : ','
+  const delimiter = pickDelimiter(source)
   const rows = []
   let row = []
   let cell = ''
@@ -236,8 +278,9 @@ function parseDelimited(text) {
 
 export function parseWorkbook(buffer) {
   const zipped = buffer[0] === 0x50 && buffer[1] === 0x4b
-  if (!zipped) {
-    const parsed = parseMatrix(parseDelimited(buffer.toString('utf8')))
+  const legacyExcel = buffer[0] === 0xd0 && buffer[1] === 0xcf
+  if (!zipped && !legacyExcel) {
+    const parsed = parseMatrix(parseDelimited(decodeText(buffer)))
     if (parsed.report) return parsed
   }
   const workbook = xlsx.read(buffer, { type: 'buffer', cellDates: false })
@@ -282,9 +325,24 @@ function fill(line, fields) {
   line.updatedAt = new Date().toISOString()
 }
 
+export function companyOf(line, plantMap = {}) {
+  return line.unitOverride || line.companyOverride || plantMap[String(line.plant || '')] || 'Unassigned'
+}
+
+// The plant whose SAP files produced this line. Older stores only kept companyOverride.
+function sourceOf(line) {
+  return line.source || line.companyOverride || ''
+}
+
+const RECEIPT_MOVES = new Set(['101', '103', '105'])
+const REVERSAL_MOVES = new Set(['102', '104', '106', '122'])
+
 export function applyRecords(store, report, records, company, options = {}) {
   const tag = (line) => {
-    if (company && COMPANIES.includes(company)) line.companyOverride = company
+    if (company && COMPANIES.includes(company)) {
+      line.companyOverride = company
+      line.source = company
+    }
     return line
   }
   if (store.lines.some((line) => line.sample)) {
@@ -312,7 +370,7 @@ export function applyRecords(store, report, records, company, options = {}) {
         const match = store.lines.find((line) => line.indentNo === record.indentNo && record.material && line.material === record.material)
         if (match) id = match.id
       }
-      const existing = store.lines.find(
+      const existing = record.poNumber && store.lines.find(
         (line) => line.poNumber === record.poNumber && String(line.poItem || '') === String(record.poItem || '') && line.id !== id,
       )
       if (existing && record.indentNo) {
@@ -334,6 +392,11 @@ export function applyRecords(store, report, records, company, options = {}) {
   if (report === 'MB51') {
     for (const record of records) {
       if (!record.matDoc) continue
+      const movement = String(record.movement || '')
+      const reversal = REVERSAL_MOVES.has(movement)
+      const receipt = RECEIPT_MOVES.has(movement)
+      // Issues, transfers and other movements are not receipts; skip them before a line is created.
+      if (!reversal && !receipt) continue
       let line = store.lines.find(
         (item) => record.poNumber && item.poNumber === record.poNumber && String(item.poItem || '') === String(record.poItem || ''),
       )
@@ -348,10 +411,6 @@ export function applyRecords(store, report, records, company, options = {}) {
           vendor: record.vendor,
         })
       }
-      const movement = String(record.movement || '')
-      const reversal = movement === '102' || movement === '122'
-      const receipt = movement === '101' || movement === '105' || movement === '103'
-      if (!reversal && !receipt) continue
       const magnitude = Math.abs(Number(record.quantity || 0))
       line.receipts[record.matDoc] = {
         qty: reversal ? -magnitude : magnitude,
@@ -377,9 +436,43 @@ export function applyRecords(store, report, records, company, options = {}) {
       at: new Date().toISOString(),
       records,
     })
-    store.uploads = store.uploads.slice(0, 30)
+    foldOldUploads(store, company)
   }
   return count
+}
+
+// Oldest first. The log is kept newest-first, so reverse before the (stable) sort
+// to keep files uploaded in the same millisecond in their real order.
+function replayableFiles(store, plant) {
+  return [...store.uploads]
+    .reverse()
+    .filter((upload) => upload.plant === plant && Array.isArray(upload.records))
+    .sort((a, b) => String(a.at).localeCompare(String(b.at)))
+}
+
+// Only the newest files per plant keep their rows. Older files are folded, in upload
+// order, into a per-plant baseline so removing a recent file never drops their lines.
+function foldOldUploads(store, plant) {
+  store.baselines ||= {}
+  const files = replayableFiles(store, plant)
+  const extra = files.length - KEEP_FILES_PER_PLANT
+  if (extra > 0 && plant) {
+    const base = { lines: store.baselines[plant]?.lines || [], vendorNames: store.vendorNames, uploads: [] }
+    for (const file of files.slice(0, extra)) applyRecords(base, file.report, file.records, plant, { log: false })
+    store.baselines[plant] = { lines: base.lines.map(baselineCopy), at: new Date().toISOString() }
+    const folded = new Set(files.slice(0, extra).map((file) => file.id))
+    store.uploads = store.uploads.filter((upload) => !folded.has(upload.id))
+  }
+  const legacy = store.uploads.filter((upload) => !Array.isArray(upload.records))
+  if (legacy.length > 30) {
+    const drop = new Set(legacy.slice(30).map((upload) => upload.id))
+    store.uploads = store.uploads.filter((upload) => !drop.has(upload.id))
+  }
+}
+
+function baselineCopy(line) {
+  const { override, remark, manualPoNumber, manualVendorName, special, unitOverride, ...sap } = line
+  return { ...sap, override: {}, receipts: { ...(line.receipts || {}) } }
 }
 
 function keptEdits(line) {
@@ -389,18 +482,19 @@ function keptEdits(line) {
     manualPoNumber: line.manualPoNumber || '',
     manualVendorName: line.manualVendorName || '',
     special: line.special || null,
+    unitOverride: line.unitOverride || '',
   }
 }
 
 function rebuildPlant(store, plant) {
   const edits = new Map()
   for (const line of store.lines) {
-    if (!line.manual && line.companyOverride === plant) edits.set(line.id, keptEdits(line))
+    if (!line.manual && sourceOf(line) === plant) edits.set(line.id, keptEdits(line))
   }
-  store.lines = store.lines.filter((line) => line.manual || line.companyOverride !== plant)
-  const files = store.uploads
-    .filter((upload) => upload.plant === plant && Array.isArray(upload.records))
-    .sort((a, b) => String(a.at).localeCompare(String(b.at)))
+  store.lines = store.lines.filter((line) => line.manual || sourceOf(line) !== plant)
+  const baseline = store.baselines?.[plant]?.lines || []
+  store.lines.push(...baseline.map((line) => JSON.parse(JSON.stringify(line))))
+  const files = replayableFiles(store, plant)
   for (const file of files) applyRecords(store, file.report, file.records, plant, { log: false })
   for (const line of store.lines) {
     const saved = edits.get(line.id)
@@ -410,11 +504,8 @@ function rebuildPlant(store, plant) {
     if (saved.manualPoNumber) line.manualPoNumber = saved.manualPoNumber
     if (saved.manualVendorName) line.manualVendorName = saved.manualVendorName
     if (saved.special) line.special = saved.special
+    if (saved.unitOverride) line.unitOverride = saved.unitOverride
   }
-}
-
-export function companyOf(line, plantMap = {}) {
-  return line.companyOverride || plantMap[String(line.plant || '')] || 'Unassigned'
 }
 
 export function lineLabel(line) {
@@ -477,6 +568,7 @@ export function removeUpload(store, uploadId) {
 export function clearPlantUploads(store, plant) {
   if (!COMPANIES.includes(plant)) return false
   store.uploads = store.uploads.filter((item) => item.plant !== plant)
+  if (store.baselines) delete store.baselines[plant]
   rebuildPlant(store, plant)
   return true
 }
@@ -530,7 +622,7 @@ export function decorate(line, plantMap, vendorNames = {}) {
     unloaded: dated('unloadedDate', ''),
     sapDelivery: line.poDelivery || line.indentDelivery || null,
   }
-  const company = line.companyOverride || plantMap[String(line.plant || '')] || 'Unassigned'
+  const company = companyOf(line, plantMap)
   const defs = [
     ['orderPlaced', 'Order placed', 'Ordered', flags.orderPlaced, dates.orderPlaced],
     ['ready', 'Ready for dispatch', 'Ready', flags.ready, dates.ready],
@@ -612,7 +704,7 @@ export function decorate(line, plantMap, vendorNames = {}) {
   }
 }
 
-export function applyEditor(line, body) {
+export function applyEditor(line, body, plantMap = {}) {
   const override = { ...(line.override || {}) }
   const setOptional = (key, value) => {
     if (value === null) delete override[key]
@@ -637,78 +729,39 @@ export function applyEditor(line, body) {
   }
   if ('receiptDone' in body) setOptional('receiptDone', body.receiptDone)
   if ('unloadedDone' in body) override.unloadedDone = Boolean(body.unloadedDone)
+  const legacyDates = {
+    orderPlacedDate: ['poMadeDate'],
+    readyDate: ['readinessDate'],
+    transitDate: ['etdDate'],
+    hyderabadDate: ['expectedArrivalDate', 'etaDate'],
+  }
   for (const key of ['orderPlacedDate', 'expectedPoDate', 'readyDate', 'transitDate', 'hyderabadDate', 'receiptDate', 'unloadedDate', 'paymentDate']) {
     if (!(key in body)) continue
     const iso = body[key] ? toISO(body[key]) : null
     if (iso) override[key] = iso
     else delete override[key]
+    for (const legacy of legacyDates[key] || []) delete override[legacy]
   }
   if ('paymentStatus' in body && ['unpaid', 'partial', 'paid'].includes(body.paymentStatus)) {
     override.paymentStatus = body.paymentStatus
   }
   line.override = override
-  if ('manualPoNumber' in body) line.manualPoNumber = asId(body.manualPoNumber)
-  if ('manualVendorName' in body) line.manualVendorName = text(body.manualVendorName)
+  if ('manualPoNumber' in body) line.manualPoNumber = asId(body.manualPoNumber).slice(0, 40)
+  if ('manualVendorName' in body) line.manualVendorName = text(body.manualVendorName).slice(0, 120)
   if ('remark' in body) line.remark = text(body.remark).slice(0, 500)
-  if ('company' in body && COMPANIES.includes(body.company)) line.companyOverride = body.company
+  if ('company' in body && COMPANIES.includes(body.company) && body.company !== companyOf(line, plantMap)) {
+    line.unitOverride = body.company
+  }
   line.updatedAt = new Date().toISOString()
 }
 
-export function lineFromView(view) {
-  if (!view?.id) return null
-  const editor = view.editor || {}
-  const receipts = {}
-  if (Number(view.receivedQty) > 0) {
-    receipts.imported = {
-      qty: Number(view.receivedQty),
-      date: view.dates?.receipt || null,
-      movement: '101',
-    }
-  }
-  const override = {}
-  if (editor.orderPlacedFollowsSap === false) override.orderPlacedDone = Boolean(editor.orderPlacedDone)
-  if (editor.receiptFollowsSap === false) override.receiptDone = Boolean(editor.receiptDone)
-  override.readyDone = Boolean(editor.readyDone)
-  override.transitDone = Boolean(editor.transitDone)
-  override.hyderabadDone = Boolean(editor.hyderabadDone)
-  override.unloadedDone = Boolean(editor.unloadedDone)
-  for (const key of ['orderPlacedDate', 'expectedPoDate', 'readyDate', 'transitDate', 'hyderabadDate', 'receiptDate', 'unloadedDate', 'paymentDate']) {
-    if (editor[key]) override[key] = editor[key]
-  }
-  if (['unpaid', 'partial', 'paid'].includes(editor.paymentStatus)) override.paymentStatus = editor.paymentStatus
-  return {
-    id: String(view.id),
-    plant: view.plant || '',
-    material: view.material || '',
-    shortText: view.shortText || '',
-    quantity: view.quantity ?? null,
-    orderQty: view.orderQty ?? null,
-    openQty: view.openQty ?? null,
-    unit: view.unit || '',
-    indentNo: view.indentNo || '',
-    indentItem: view.indentItem || '',
-    requisitioner: view.requisitioner || '',
-    requisitionDate: view.requisitionDate || null,
-    indentDelivery: view.indentDelivery || null,
-    poNumber: view.sapPoNumber || '',
-    poItem: view.poItem || '',
-    vendor: view.vendor || '',
-    vendorName: view.sapVendorName || '',
-    netPrice: view.netPrice ?? null,
-    poDate: view.poDate || null,
-    poDelivery: view.poDelivery || null,
-    manualPoNumber: editor.manualPoNumber || '',
-    manualVendorName: editor.manualVendorName || '',
-    remark: editor.remark || view.remark || '',
-    companyOverride: COMPANIES.includes(view.company) ? view.company : '',
-    override,
-    receipts,
-    manual: Boolean(view.manual),
-    special: view.special?.at ? { by: view.special.by || '', note: view.special.note || '', at: view.special.at } : null,
-    sample: false,
-    createdAt: view.updatedAt || new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  }
+// Ticks (or clears) one milestone. Used by the quick "advance" and bulk actions.
+export function stepPatch(step, done, date) {
+  if (!STEP_KEYS.includes(step)) return null
+  const patch = { [`${step}Done`]: Boolean(done) }
+  // Without a date the line keeps whatever (possibly planned) date it already had.
+  if (date) patch[`${step}Date`] = date
+  return patch
 }
 
 export function normalizeStore(store) {
@@ -718,12 +771,29 @@ export function normalizeStore(store) {
   store.uploads.forEach((upload) => {
     if (!upload.id) upload.id = crypto.randomBytes(8).toString('hex')
   })
-  store.sessions ||= []
-  store.plantSessions ||= {}
-  store.plantPasswords ||= {}
+  store.baselines ||= {}
   store.notices ||= []
-  for (const [id, password] of Object.entries(DEFAULT_PASSWORDS)) {
-    if (!store.plantPasswords[id]) store.plantPasswords[id] = password
+  store.loginFailures ||= {}
+  const now = new Date().toISOString()
+  const markForSave = () => Object.defineProperty(store, 'needsSave', { value: true, enumerable: false, configurable: true })
+  // Sessions are kept as hashes with a start time. Older stores held raw tokens,
+  // which are converted and written back on the first read.
+  if ((store.sessions || []).some((item) => typeof item === 'string') || Object.values(store.plantSessions || {}).some((item) => typeof item === 'string')) {
+    markForSave()
+  }
+  store.sessions =(store.sessions || []).map((item) => (typeof item === 'string' ? { hash: hashToken(item), at: now } : item))
+  const plantSessions = {}
+  for (const [key, value] of Object.entries(store.plantSessions || {})) {
+    if (typeof value === 'string') plantSessions[hashToken(key)] = { plant: value, at: now }
+    else plantSessions[key] = value
+  }
+  store.plantSessions = plantSessions
+  store.plantPasswords ||= {}
+  for (const id of COMPANIES) {
+    if (!store.plantPasswords[id]) {
+      store.plantPasswords[id] = randomPassword(id.replace('TCL-', ''))
+      markForSave()
+    }
   }
   const plantMap = {}
   for (const [plant, company] of Object.entries(store.plantMap || DEFAULT_PLANTS)) {
