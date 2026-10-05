@@ -117,8 +117,12 @@ function Detail({ line, siblings, go, openLine, homePath, onMark }) {
           Share item
         </button>
       </div>
-      <p className="eyebrow">{line.company}</p>
-      <h2>{line.shortText}</h2>
+      <div className="status-hero">
+        <p className="eyebrow">{line.company}</p>
+        <h2>{line.statusLabel}</h2>
+        <TrackingRail stages={line.stages} />
+      </div>
+      <h3 className="item-name">{line.shortText}</h3>
       <p className="lede">
         <button type="button" className="code" onClick={() => openLine(line.id)}>
           {line.material || 'No code'}
@@ -134,9 +138,8 @@ function Detail({ line, siblings, go, openLine, homePath, onMark }) {
           <strong>{pretty(line.awaitingPo ? line.dates.expectedPo : line.dates.hyderabad)}</strong>
         </div>
       </div>
-      <SpecialPanel line={line} onMark={onMark} />
-      <TrackingRail stages={line.stages} />
       <Timeline line={line} />
+      <SpecialPanel line={line} onMark={onMark} />
       <dl className="facts">
         <div><dt>Quantity</dt><dd>{qty(line.orderQty ?? line.quantity, line.unit)}</dd></div>
         <div><dt>Still to receive</dt><dd>{line.openQty == null ? '—' : qty(line.openQty, line.unit)}</dd></div>
@@ -429,6 +432,7 @@ export default function UserApp({ go, lineId, plantId }) {
                   onClick={() => openLine(line.id)}
                 >
                   <div>
+                    <MiniTrack stages={line.stages} statusLabel={line.statusLabel} />
                     <div className="row-title">
                       <h3>{line.shortText}</h3>
                     </div>
@@ -442,7 +446,6 @@ export default function UserApp({ go, lineId, plantId }) {
                       {line.vendorName ? ` · ${line.vendorName}` : ''}
                       {line.special ? ' · Special' : ''}
                     </p>
-                    <MiniTrack stages={line.stages} statusLabel={line.statusLabel} />
                   </div>
                   <div className="row-side">
                     <span>{line.awaitingPo ? 'Expected PO' : 'Hyderabad'}</span>

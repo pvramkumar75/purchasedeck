@@ -218,7 +218,11 @@ tr.tone-received td { background: #dff6e8; }
 .pay-partial { background: #fff4e5; color: #9a5b00; }
 .pay-unpaid { background: #fdecec; color: #b42318; }
 
-.mini { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); font-size: 13px; }
+.mini { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; color: var(--ink); font-size: 13px; font-weight: 650; }
+.status-hero { margin: 4px 0 14px; }
+.status-hero h2 { font-size: 28px; }
+.status-hero .rail-scroll { padding-top: 8px; }
+.item-name { font-family: Outfit, sans-serif; font-size: 18px; font-weight: 650; margin: 0 0 8px; }
 .minidots { display: flex; gap: 4px; }
 .minidots i { width: 8px; height: 8px; border-radius: 99px; background: #e5e7eb; display: block; }
 .minidots i.done { background: var(--green); }
