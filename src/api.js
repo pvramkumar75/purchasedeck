@@ -69,6 +69,8 @@ async function request(url, options = {}, auth = { buyer: true, plantId: '' }) {
     error.status = 0
     throw error
   }
+  // 204: the board has not changed since the version the caller already holds.
+  if (response.status === 204) return null
   const data = await response.json().catch(() => ({}))
   if (!response.ok) {
     const error = new Error(data.error || FRIENDLY[response.status] || 'Something went wrong.')
@@ -97,8 +99,10 @@ async function gzip(bytes) {
 const post = (url, body, auth) => request(url, { method: 'POST', body: JSON.stringify(body || {}) }, auth)
 
 export const api = {
-  bootstrap: () => request('/api/bootstrap'),
-  plantBootstrap: (plantId) => request('/api/bootstrap', {}, { buyer: false, plantId }),
+  // Pass the version already on screen to get null back when nothing changed.
+  bootstrap: (known) => request('/api/bootstrap', known ? { headers: { 'x-known-version': known } } : {}),
+  plantBootstrap: (plantId, known) => request('/api/bootstrap', known ? { headers: { 'x-known-version': known } } : {}, { buyer: false, plantId }),
+  importBlob: () => post('/api/import-blob'),
   plantLogin: (plant, password) => post('/api/plant-login', { plant, password }, { buyer: false }),
   plantLogout: (plantId) => post('/api/plant-logout', {}, { buyer: false, plantId }),
   savePasswords: (passwords) => post('/api/plant-passwords', { passwords }),

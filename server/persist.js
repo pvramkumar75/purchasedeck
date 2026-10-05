@@ -6,6 +6,7 @@ import { createDemoStore, normalizeStore } from './logic.js'
 const dataDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data')
 const storePath = process.env.STORE_FILE || (process.env.VERCEL ? '/tmp/material-tracking-store.json' : path.join(dataDir, 'store.json'))
 const BLOB_NAME = 'material-tracking/store.json'
+const ROW_ID = 'main'
 const ATTEMPTS = 10
 // Stay well inside Vercel's 30 second function limit.
 const DEADLINE_MS = 20000
@@ -25,6 +26,83 @@ class StoreConflict extends Error {
   }
 }
 
+// ---------- Supabase (main store) ----------
+
+// Names match what Vercel's Supabase integration sets. Only a secret (service role)
+// key is used: the publishable key is public and must never be able to read the board.
+const supabaseUrl = () => String(process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '').replace(/\/+$/, '')
+const supabaseKey = () => process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || ''
+const useSupabase = () => Boolean(supabaseUrl() && supabaseKey())
+
+function supabaseHeaders(extra = {}) {
+  const key = supabaseKey()
+  // New "sb_secret_" keys go in the apikey header only; legacy JWT keys also need Authorization.
+  return {
+    apikey: key,
+    ...(key.startsWith('sb_') ? {} : { Authorization: `Bearer ${key}` }),
+    'Content-Type': 'application/json',
+    ...extra,
+  }
+}
+
+async function supabaseFetch(query, options = {}) {
+  const response = await fetch(`${supabaseUrl()}/rest/v1/app_store${query}`, {
+    ...options,
+    headers: supabaseHeaders(options.headers),
+    signal: AbortSignal.timeout(10000),
+  })
+  if (!response.ok && response.status !== 409) {
+    const body = await response.text().catch(() => '')
+    if (/PGRST205|app_store/.test(body) && response.status === 404) {
+      throw new HttpError(503, 'The Supabase table is not set up yet. Run supabase/setup.sql in the Supabase SQL editor.')
+    }
+    const error = new Error(`Supabase ${response.status}: ${body.slice(0, 200)}`)
+    error.name = 'StoreError'
+    throw error
+  }
+  return response
+}
+
+// Each server instance keeps the last copy; an unchanged board costs one tiny query.
+let memo = null
+
+async function readSupabase() {
+  const head = await (await supabaseFetch(`?id=eq.${ROW_ID}&select=version`)).json()
+  if (!head.length) return null
+  const version = String(head[0].version)
+  if (memo?.version === version) return memo
+  const rows = await (await supabaseFetch(`?id=eq.${ROW_ID}&select=doc,version`)).json()
+  if (!rows.length) return null
+  memo = { text: JSON.stringify(rows[0].doc), version: String(rows[0].version) }
+  return memo
+}
+
+async function writeSupabase(text, version) {
+  const now = new Date().toISOString()
+  if (!version) {
+    const response = await supabaseFetch('', {
+      method: 'POST',
+      headers: { Prefer: 'return=minimal' },
+      body: `{"id":"${ROW_ID}","version":1,"updated_at":"${now}","doc":${text}}`,
+    })
+    if (response.status === 409) throw new StoreConflict('The store already exists.')
+    memo = { text, version: '1' }
+    return '1'
+  }
+  const next = String(Number(version) + 1)
+  const response = await supabaseFetch(`?id=eq.${ROW_ID}&version=eq.${Number(version)}&select=version`, {
+    method: 'PATCH',
+    headers: { Prefer: 'return=representation' },
+    body: `{"version":${next},"updated_at":"${now}","doc":${text}}`,
+  })
+  const rows = await response.json()
+  if (!rows.length) throw new StoreConflict('Someone else saved first.')
+  memo = { text, version: next }
+  return next
+}
+
+// ---------- Vercel Blob (old store, kept for importing) ----------
+
 const useBlob = () => Boolean(process.env.BLOB_READ_WRITE_TOKEN)
 
 // The etag that `get` reports is passed back to `put` as ifMatch. In case this
@@ -38,7 +116,7 @@ const ETAG_STYLES = [
 let etagStyle = 0
 let conditionalWrites = true
 
-async function readBlob() {
+export async function readBlob() {
   const { get } = await import('@vercel/blob')
   const result = await get(BLOB_NAME, { access: 'private', useCache: false })
   if (!result) return null
@@ -51,17 +129,16 @@ async function writeBlob(text, version) {
   const { put, BlobPreconditionFailedError } = await import('@vercel/blob')
   const options = { access: 'private', addRandomSuffix: false, contentType: 'application/json' }
   if (!version) {
-    // Creating the store for the first time: never overwrite one that exists.
     try {
       await put(BLOB_NAME, text, { ...options, allowOverwrite: false })
     } catch (error) {
       throw new StoreConflict(error.message)
     }
-    return
+    return null
   }
   if (!conditionalWrites) {
     await put(BLOB_NAME, text, { ...options, allowOverwrite: true })
-    return
+    return null
   }
   const style = etagStyle
   try {
@@ -70,7 +147,10 @@ async function writeBlob(text, version) {
     if (error instanceof BlobPreconditionFailedError) throw new StoreConflict(error.message, style)
     throw error
   }
+  return null
 }
+
+// ---------- local file (development) ----------
 
 function readFile() {
   if (!fs.existsSync(storePath)) return null
@@ -83,15 +163,26 @@ function writeFile(text) {
   const temp = `${storePath}.${process.pid}.tmp`
   fs.writeFileSync(temp, text)
   fs.renameSync(temp, storePath)
+  return String(fs.statSync(storePath).mtimeMs)
 }
+
+// ---------- shared ----------
+
+export function storageKind() {
+  if (useSupabase()) return 'supabase'
+  if (useBlob()) return 'blob'
+  return process.env.VERCEL ? 'temporary' : 'file'
+}
+
+const kind = () => storageKind()
+const readRaw = () => (kind() === 'supabase' ? readSupabase() : kind() === 'blob' ? readBlob() : readFile())
 
 async function save(store, version) {
   const text = JSON.stringify(store)
-  if (useBlob()) await writeBlob(text, version)
-  else writeFile(text)
+  if (kind() === 'supabase') return writeSupabase(text, version)
+  if (kind() === 'blob') return writeBlob(text, version)
+  return writeFile(text)
 }
-
-const readRaw = () => (useBlob() ? readBlob() : readFile())
 
 function parse(raw) {
   try {
@@ -105,9 +196,8 @@ function parse(raw) {
 async function load(depth = 0) {
   const raw = await readRaw()
   if (!raw) {
-    const fresh = createDemoStore()
     try {
-      await save(fresh, null)
+      await save(createDemoStore(), null)
     } catch (error) {
       if (!(error instanceof StoreConflict) || depth > 1) throw error
     }
@@ -131,6 +221,11 @@ export async function readStore() {
   return (await load()).store
 }
 
+export async function readVersioned() {
+  const { store, version } = await load()
+  return { store, version }
+}
+
 // Runs a change against the latest store and saves it. If someone else saved in
 // between, the change is replayed on their version instead of overwriting it.
 export async function mutate(change) {
@@ -139,20 +234,22 @@ export async function mutate(change) {
     const { store, version, text } = await load()
     const result = await change(store)
     try {
-      await save(store, version)
-      return { store, result }
+      const saved = await save(store, version)
+      return { store, result, version: saved }
     } catch (error) {
       if (!(error instanceof StoreConflict)) throw error
-      const now = await readRaw()
-      if (now && now.text === text && conditionalWrites) {
-        // Nobody else saved, yet the write was refused: the etag spelling is wrong.
-        // Only the writer that used the current spelling moves on to the next one.
-        if (error.style === etagStyle) etagStyle += 1
-        if (etagStyle >= ETAG_STYLES.length) {
-          conditionalWrites = false
-          console.warn('Blob conditional writes are not matching; saving without the etag check.')
+      if (kind() === 'blob' && conditionalWrites) {
+        const now = await readRaw()
+        if (now && now.text === text) {
+          // Nobody else saved, yet Blob refused the write: the etag spelling is wrong.
+          // Only the writer that used the current spelling moves on to the next one.
+          if (error.style === etagStyle) etagStyle += 1
+          if (etagStyle >= ETAG_STYLES.length) {
+            conditionalWrites = false
+            console.warn('Blob conditional writes are not matching; saving without the etag check.')
+          }
+          continue
         }
-        continue
       }
       if (attempt === ATTEMPTS || Date.now() - started > DEADLINE_MS) {
         throw new HttpError(503, 'Several people are saving at once. Try again in a moment.')

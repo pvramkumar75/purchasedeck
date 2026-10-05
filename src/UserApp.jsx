@@ -210,6 +210,7 @@ export default function UserApp({ go, lineId, plantId }) {
   const [showFilters, setShowFilters] = useState(false)
   const [unlocked, setUnlocked] = useState(() => COMPANIES.includes(plantId) && Boolean(getPlantToken(plantId)))
   const searchRef = useRef(null)
+  const versionRef = useRef(null)
   useSlashFocus(searchRef)
   const allowed = useMemo(() => companiesForPlant(plantId), [plantId])
   const homePath = `/p/${encodeURIComponent(plantId)}`
@@ -217,6 +218,7 @@ export default function UserApp({ go, lineId, plantId }) {
   useEffect(() => {
     setUnlocked(COMPANIES.includes(plantId) && Boolean(getPlantToken(plantId)))
     setData(null)
+    versionRef.current = null
     setCompany('ALL')
   }, [plantId])
 
@@ -224,14 +226,18 @@ export default function UserApp({ go, lineId, plantId }) {
     setPlantToken(plantId, '')
     setUnlocked(false)
     setData(null)
+    versionRef.current = null
   }, [plantId])
 
   const load = useCallback(async (manual) => {
     if (manual) setRefreshing(true)
     try {
-      const next = await api.plantBootstrap(plantId)
-      setData(next)
-      setLoadedAt(next.serverTime || new Date().toISOString())
+      const next = await api.plantBootstrap(plantId, versionRef.current)
+      if (next) {
+        versionRef.current = next.version || null
+        setData(next)
+      }
+      setLoadedAt(next?.serverTime || new Date().toISOString())
       setError('')
     } catch (err) {
       if (err.status === 401) lock()
@@ -427,6 +433,7 @@ export default function UserApp({ go, lineId, plantId }) {
             openLine={openLine}
             onMark={async (body) => {
               const next = await api.markSpecial({ ...body, id: selected.id }, plantId)
+              versionRef.current = next.version || null
               setData(next)
             }}
           />

@@ -757,6 +757,19 @@ function SettingsTab({ data, replaceAll, onUnauthorized }) {
     }
   }
 
+  const importOld = async () => {
+    setBusy('import')
+    try {
+      const next = await api.importBlob()
+      replaceAll(next)
+      toast(`Imported ${next.imported} lines from the old store${next.kept ? `, kept ${next.kept} added since` : ''}.`)
+    } catch (err) {
+      fail(err)
+    } finally {
+      setBusy('')
+    }
+  }
+
   const invite = async (id) => {
     const text = `${plantLabel(id)} material status\n${linkFor(id)}\nPassword: ${passwords[id] || ''}`
     if (navigator.share) {
@@ -780,8 +793,24 @@ function SettingsTab({ data, replaceAll, onUnauthorized }) {
             <ul>
               {security.defaultPin && <li>The desk still uses the starting PIN. Change it below.</li>}
               {security.publishedPasswords?.length > 0 && <li>{security.publishedPasswords.map(plantLabel).join(', ')} still {security.publishedPasswords.length === 1 ? 'uses a password' : 'use passwords'} that appeared in public code. Generate new ones below.</li>}
-              {security.storage === 'temporary' && <li>The server has no Blob store connected, so changes can be lost when it restarts.</li>}
+              {security.storage === 'temporary' && <li>The server has no database connected, so changes can be lost when it restarts.</li>}
             </ul>
+          </div>
+        </section>
+      )}
+
+      {security.oldBlob && (
+        <section className="card">
+          <div className="card-head"><h2>Bring back the old data</h2></div>
+          <p className="muted small">
+            The board now lives in Supabase. The earlier materials, files and notes are still in the old Vercel Blob store, which Vercel
+            blocks until its monthly limits reset. Once it opens again, this copies them in. Lines added here since then are kept, and
+            passwords, the PIN and sign-ins stay as they are now.
+          </p>
+          <div className="row-actions">
+            <button type="button" className="btn" disabled={busy === 'import'} onClick={importOld}>
+              <Icon name="download" size={16} /> {busy === 'import' ? 'Importing…' : 'Import from old store'}
+            </button>
           </div>
         </section>
       )}
@@ -871,8 +900,10 @@ function Desk({ onUnauthorized }) {
   const searchRef = useRef(null)
   useSlashFocus(searchRef)
 
+  const versionRef = useRef(null)
   const replaceAll = useCallback((next) => {
     if (!next) return
+    versionRef.current = next.version || null
     setData(next)
     setLoadedAt(next.serverTime || new Date().toISOString())
     setLoadError('')
@@ -890,7 +921,9 @@ function Desk({ onUnauthorized }) {
   const load = useCallback(async (manual) => {
     if (manual) setRefreshing(true)
     try {
-      replaceAll(await api.bootstrap())
+      const next = await api.bootstrap(versionRef.current)
+      if (next) replaceAll(next)
+      else setLoadedAt(new Date().toISOString())
     } catch (err) {
       if (err.status === 401) fail(err)
       else setLoadError(err.message)

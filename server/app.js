@@ -20,6 +20,7 @@ import {
   hashToken,
   isPublishedPassword,
   lineLabel,
+  normalizeStore,
   notifyChangedSpecials,
   num,
   parseWorkbook,
@@ -28,7 +29,7 @@ import {
   specialSnapshot,
   stepPatch,
 } from './logic.js'
-import { HttpError, mutate, readStore } from './persist.js'
+import { HttpError, mutate, readBlob, readVersioned, storageKind } from './persist.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const distDir = path.join(__dirname, '..', 'dist')
@@ -124,7 +125,7 @@ function forPlant(line) {
   return rest
 }
 
-function payload(store, viewer) {
+function payload(store, viewer, version = null) {
   const allowed = viewer.plant ? companiesForPlant(viewer.plant) : COMPANIES
   let lines = store.lines
     .map((line) => decorate(line, store.plantMap, store.vendorNames))
@@ -137,6 +138,7 @@ function payload(store, viewer) {
     plant: viewer.plant || null,
     notices: store.notices.filter((notice) => !viewer.plant || allowed.includes(notice.company)),
     serverTime: new Date().toISOString(),
+    version: version == null ? null : String(version),
   }
   if (viewer.buyer) {
     body.plantMap = store.plantMap
@@ -148,7 +150,8 @@ function payload(store, viewer) {
     body.security = {
       defaultPin: !store.buyerPin?.hash && !process.env.BUYER_PIN,
       publishedPasswords: COMPANIES.filter((id) => isPublishedPassword(store.plantPasswords[id])),
-      storage: process.env.BLOB_READ_WRITE_TOKEN ? 'blob' : process.env.VERCEL ? 'temporary' : 'file',
+      storage: storageKind(),
+      oldBlob: storageKind() === 'supabase' && Boolean(process.env.BLOB_READ_WRITE_TOKEN) && !store.importedFromBlob,
     }
   }
   return body
@@ -186,7 +189,7 @@ const route = (handler) => async (req, res) => {
       return
     }
     console.error(error)
-    if (error?.name?.startsWith('Blob') || /Vercel Blob/.test(error?.message || '')) {
+    if (error?.name?.startsWith('Blob') || error?.name === 'StoreError' || error?.name === 'TimeoutError' || /Vercel Blob/.test(error?.message || '')) {
       res.status(503).json({ error: 'The data store is not answering right now, so nothing can be loaded or saved. Try again later.' })
       return
     }
@@ -196,22 +199,27 @@ const route = (handler) => async (req, res) => {
 
 // A buyer change: checks the session, applies the change, saves, returns the fresh board.
 const buyerChange = (change) => route(async (req, res) => {
-  const { store, result } = await mutate(async (current) => {
+  const { store, result, version } = await mutate(async (current) => {
     requireBuyer(current, req)
     return change(current, req)
   })
-  res.json({ ...payload(store, { buyer: true }), ...(result || {}) })
+  res.json({ ...payload(store, { buyer: true }, version), ...(result || {}) })
 })
 
 app.get('/api/health', route(async (_req, res) => {
-  res.json({ ok: true, storage: process.env.BLOB_READ_WRITE_TOKEN ? 'blob' : process.env.VERCEL ? 'temporary' : 'file' })
+  res.json({ ok: true, storage: storageKind() })
 }))
 
 app.get('/api/bootstrap', route(async (req, res) => {
-  const store = await readStore()
+  const { store, version } = await readVersioned()
   const viewer = viewerOf(store, req)
   if (!viewer) throw new HttpError(401, req.get('x-buyer-token') ? 'Sign in to the purchase desk again.' : 'Enter the plant password.')
-  res.json(payload(store, viewer))
+  // Background refreshes send the version they hold; nothing changed means an empty reply.
+  if (version != null && req.get('x-known-version') === String(version)) {
+    res.status(204).end()
+    return
+  }
+  res.json(payload(store, viewer, version))
 }))
 
 app.post('/api/login', route(async (req, res) => {
@@ -417,7 +425,7 @@ app.post('/api/remove', buyerChange((store, req) => {
 }))
 
 app.post('/api/special', route(async (req, res) => {
-  const { store, result } = await mutate(async (current) => {
+  const { store, result, version } = await mutate(async (current) => {
     const viewer = viewerOf(current, req)
     if (!viewer) throw new HttpError(401, 'Sign in before marking a special item.')
     const origin = current.lines.find((item) => item.id === req.body?.id)
@@ -448,7 +456,7 @@ app.post('/api/special', route(async (req, res) => {
     })
     return { viewer }
   })
-  res.json(payload(store, result.viewer.buyer ? { buyer: true } : { plant: result.viewer.plant }))
+  res.json(payload(store, result.viewer.buyer ? { buyer: true } : { plant: result.viewer.plant }, version))
 }))
 
 app.post('/api/upload-remove', buyerChange((store, req) => {
@@ -470,6 +478,38 @@ app.put('/api/plant-map', buyerChange((store, req) => {
   }
   if (!Object.keys(next).length) throw new HttpError(400, 'Keep at least one plant mapped to a unit.')
   store.plantMap = next
+}))
+
+// One-time copy of the board from the old Vercel Blob store into Supabase. Materials,
+// files and notices come from Blob; passwords, the PIN and sign-ins stay as they are now.
+app.post('/api/import-blob', buyerChange(async (store) => {
+  if (storageKind() !== 'supabase' || !process.env.BLOB_READ_WRITE_TOKEN) {
+    throw new HttpError(400, 'There is no old Blob store to import from.')
+  }
+  let raw
+  try {
+    raw = await readBlob()
+  } catch (error) {
+    console.error(error)
+    throw new HttpError(503, 'Vercel is still blocking the old Blob store. Try again after its monthly limits reset.')
+  }
+  if (!raw) throw new HttpError(404, 'The old Blob store is empty.')
+  const old = normalizeStore(JSON.parse(raw.text))
+  const oldIds = new Set(old.lines.map((line) => line.id))
+  const addedSince = store.lines.filter((line) => !line.sample && !oldIds.has(line.id))
+  store.lines = [...old.lines, ...addedSince]
+  store.vendorNames = { ...old.vendorNames, ...store.vendorNames }
+  const uploadIds = new Set(store.uploads.map((upload) => upload.id))
+  store.uploads = [...store.uploads, ...old.uploads.filter((upload) => !uploadIds.has(upload.id))]
+    .sort((a, b) => String(b.at).localeCompare(String(a.at)))
+  store.baselines = { ...old.baselines, ...store.baselines }
+  const noticeIds = new Set(store.notices.map((notice) => notice.id))
+  store.notices = [...store.notices, ...old.notices.filter((notice) => !noticeIds.has(notice.id))]
+    .sort((a, b) => String(b.at).localeCompare(String(a.at)))
+    .slice(0, 40)
+  store.plantMap = old.plantMap
+  store.importedFromBlob = new Date().toISOString()
+  return { imported: old.lines.length, kept: addedSince.length }
 }))
 
 app.use('/api', (_req, res) => {
