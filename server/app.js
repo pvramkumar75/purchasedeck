@@ -186,6 +186,10 @@ const route = (handler) => async (req, res) => {
       return
     }
     console.error(error)
+    if (error?.name?.startsWith('Blob') || /Vercel Blob/.test(error?.message || '')) {
+      res.status(503).json({ error: 'The data store is not answering right now, so nothing can be loaded or saved. Try again later.' })
+      return
+    }
     res.status(500).json({ error: 'The server could not finish that. Try again in a moment.' })
   }
 }
