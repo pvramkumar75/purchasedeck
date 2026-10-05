@@ -3,7 +3,6 @@ import { api, getToken, setToken } from './api.js'
 import {
   PLANTS,
   SORTS,
-  STATUS_FILTERS,
   STEPS,
   bucketCounts,
   currentStage,
@@ -19,7 +18,7 @@ import {
   todayISO,
 } from './model.js'
 import { Chips, Icon, Logo, SearchBox, Skeleton, ThemeToggle, Toggle, ago, copyText, useFeedback, useNow, useSlashFocus } from './ui.jsx'
-import { EmptyState, MiniTrack, NoticeBell, SpecialPanel, StackBar, StatusBadge, ToneKey, TrackingRail } from './visuals.jsx'
+import { EmptyState, MiniTrack, NoticeBell, SpecialPanel, StackBar, StatusBadge, StatusFilters, ToneKey, TrackingRail } from './visuals.jsx'
 
 const TABS = [
   { id: 'overview', label: 'Overview', icon: 'grid' },
@@ -359,11 +358,11 @@ function AddLine({ onClose, onCreated }) {
 function Overview({ lines, notices, onFilter, onOpen }) {
   const counts = bucketCounts(lines)
   const kpis = [
-    { id: 'indent', label: 'Awaiting PO', value: counts.indent, tone: 'indent', icon: 'file' },
-    { id: 'late', label: 'Late indents', value: counts.late, tone: 'late', icon: 'clock', hint: '> 7 working days' },
-    { id: 'open', label: 'PO, not received', value: counts.open + counts.partial, tone: 'waiting', icon: 'truck', bucket: 'open' },
-    { id: 'overdue', label: 'Overdue', value: counts.overdue, tone: 'late', icon: 'alert', hint: 'past SAP delivery date' },
-    { id: 'received', label: 'Received', value: counts.received, tone: 'received', icon: 'check' },
+    { id: 'indent', label: 'Indent – no PO yet', value: counts.indent, tone: 'indent', icon: 'file' },
+    { id: 'late', label: 'Indent pending > 7 days', value: counts.late, tone: 'late', icon: 'clock', hint: 'no PO, raised over 7 working days ago' },
+    { id: 'po-open', label: 'PO placed – not fully received', value: counts['po-open'], tone: 'waiting', icon: 'truck', hint: `${counts.open} nothing yet · ${counts.partial} part received` },
+    { id: 'overdue', label: 'Past SAP delivery date', value: counts.overdue, tone: 'late', icon: 'alert', hint: 'PO not fully received' },
+    { id: 'received', label: 'Fully received', value: counts.received, tone: 'received', icon: 'check' },
     { id: 'special', label: 'Special effort', value: counts.special, tone: 'special', icon: 'star' },
   ]
   const units = [...PLANTS.map((plant) => plant.id), ...(lines.some((line) => line.company === 'Unassigned') ? ['Unassigned'] : [])]
@@ -422,7 +421,7 @@ function Overview({ lines, notices, onFilter, onOpen }) {
 
       <div className="grid-2">
         <section className="card">
-          <div className="card-head"><h2>Needs attention</h2><span className="muted small">Special, overdue, late</span></div>
+          <div className="card-head"><h2>Needs attention</h2><span className="muted small">Special, past delivery date, pending > 7 days</span></div>
           {attention.length === 0 ? <p className="muted pad">Nothing urgent. Well done.</p> : (
             <div className="attention">
               {attention.map((line) => (
@@ -1135,7 +1134,7 @@ function Desk({ onUnauthorized }) {
                   {SORTS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
                 </select>
               </div>
-              <Chips label="Status" value={bucket} onChange={setBucket} items={STATUS_FILTERS.map((item) => ({ ...item, count: counts[item.id] }))} />
+              <StatusFilters value={bucket} onChange={setBucket} counts={counts} />
               {stageFilter && (
                 <p className="filter-note">Showing PO lines whose next step is <strong>{stageFilter.label}</strong>. <button type="button" className="text-btn small" onClick={() => setBucket('all')}>Clear</button></p>
               )}

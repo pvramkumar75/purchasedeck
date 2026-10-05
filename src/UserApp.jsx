@@ -4,7 +4,6 @@ import {
   COMPANIES,
   PERIODS,
   SORTS,
-  STATUS_FILTERS,
   STEPS,
   bucketCounts,
   companiesForPlant,
@@ -20,8 +19,8 @@ import {
   sortLines,
   statusTone,
 } from './model.js'
-import { Chips, Icon, Logo, SearchBox, Skeleton, ThemeToggle, ago, copyText, useFeedback, useNow, useSlashFocus } from './ui.jsx'
-import { EmptyState, MiniTrack, NoticeBell, SpecialPanel, StackBar, StatusBadge, Timeline, ToneKey, TrackingRail } from './visuals.jsx'
+import { Icon, Logo, SearchBox, Skeleton, ThemeToggle, ago, copyText, useFeedback, useNow, useSlashFocus } from './ui.jsx'
+import { EmptyState, MiniTrack, NoticeBell, SpecialPanel, StackBar, StatusBadge, StatusFilters, Timeline, ToneKey, TrackingRail } from './visuals.jsx'
 
 const EMPTY = { q: '', indent: '', item: '', supplier: '', ...Object.fromEntries(STEPS.map((step) => [step.key, ''])) }
 
@@ -342,10 +341,10 @@ export default function UserApp({ go, lineId, plantId }) {
           {data && (
             <section className="summary">
               {[
-                ['indent', 'Awaiting PO', counts.indent, 'indent'],
-                ['open', 'PO, not received', counts.open + counts.partial, 'waiting'],
-                ['overdue', 'Overdue', counts.overdue, 'late'],
-                ['received', 'Received', counts.received, 'received'],
+                ['indent', 'Indent – no PO yet', counts.indent, 'indent'],
+                ['po-open', 'PO placed – not fully received', counts['po-open'], 'waiting'],
+                ['overdue', 'Past SAP delivery date', counts.overdue, 'late'],
+                ['received', 'Fully received', counts.received, 'received'],
               ].map(([id, label, value, tone]) => (
                 <button type="button" key={id} className={`mini-kpi tone-${tone}${bucket === id ? ' on' : ''}`} onClick={() => setBucket((current) => (current === id ? 'all' : id))}>
                   <strong>{value}</strong>
@@ -377,7 +376,7 @@ export default function UserApp({ go, lineId, plantId }) {
             </div>
           )}
 
-          <Chips label="Status" value={bucket} onChange={setBucket} items={STATUS_FILTERS.map((item) => ({ ...item, count: counts[item.id] }))} />
+          <StatusFilters value={bucket} onChange={setBucket} counts={counts} />
 
           <div className="list-meta">
             <span aria-live="polite">{error || (data ? `${visible.length} material${visible.length === 1 ? '' : 's'}` : 'Loading…')}</span>

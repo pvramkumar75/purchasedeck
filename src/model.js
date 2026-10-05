@@ -114,36 +114,88 @@ export function statusTone(line) {
 }
 
 export const TONES = [
-  { id: 'indent', label: 'Indent, within 7 working days' },
-  { id: 'late', label: 'Indent older than 7 working days' },
-  { id: 'waiting', label: 'PO, material not received' },
-  { id: 'partial', label: 'Partial receipt' },
+  { id: 'indent', label: 'Indent – no PO yet' },
+  { id: 'late', label: 'Indent pending > 7 days' },
+  { id: 'waiting', label: 'PO placed – nothing received' },
+  { id: 'partial', label: 'PO placed – part received' },
   { id: 'received', label: 'Fully received' },
 ]
 
+// Status: every line is in exactly one of these, so they add up to All.
 export const STATUS_FILTERS = [
-  { id: 'all', label: 'All' },
-  { id: 'indent', label: 'Awaiting PO', dot: 'indent' },
-  { id: 'late', label: 'Late indents', dot: 'late' },
-  { id: 'open', label: 'PO, not received', dot: 'waiting' },
-  { id: 'partial', label: 'Partly received', dot: 'partial' },
-  { id: 'received', label: 'Received', dot: 'received' },
-  { id: 'overdue', label: 'Overdue', dot: 'late' },
-  { id: 'special', label: 'Special effort', dot: 'special' },
+  { id: 'all', label: 'All', hint: 'Every line in this view.' },
+  {
+    id: 'indent',
+    label: 'Indent – no PO yet',
+    dot: 'indent',
+    hint: 'Indent raised in SAP (ME5A), but no PO number yet from ME2L or typed in by purchase.',
+  },
+  {
+    id: 'open',
+    label: 'PO placed – nothing received',
+    dot: 'waiting',
+    hint: 'A PO exists, but no quantity has reached the factory yet.',
+  },
+  {
+    id: 'partial',
+    label: 'PO placed – part received',
+    dot: 'partial',
+    hint: 'Some quantity has been received (MB51 goods receipt); the balance is still open.',
+  },
+  {
+    id: 'received',
+    label: 'Fully received',
+    dot: 'received',
+    hint: 'Open quantity is 0 in ME2L, receipts cover the order, or purchase ticked "Received at factory".',
+  },
 ]
+
+// Watch list: lines that need a push. These overlap with the status filters.
+export const WATCH_FILTERS = [
+  {
+    id: 'late',
+    label: 'Indent pending > 7 days',
+    dot: 'late',
+    hint: 'Indents with no PO, raised more than 7 working days ago. Needs the requisition date in ME5A.',
+  },
+  {
+    id: 'overdue',
+    label: 'Past SAP delivery date',
+    dot: 'late',
+    hint: 'POs not fully received whose SAP delivery date has passed. Needs the delivery date in ME2L.',
+  },
+  {
+    id: 'special',
+    label: 'Special effort',
+    dot: 'special',
+    hint: 'Marked by purchase or a plant for extra attention. Both sides get a notice when it changes.',
+  },
+]
+
+// Reached from dashboard cards rather than a chip.
+export const EXTRA_FILTERS = [
+  { id: 'po-open', label: 'PO placed – not fully received' },
+]
+
+export const ALL_FILTERS = [...STATUS_FILTERS, ...WATCH_FILTERS, ...EXTRA_FILTERS]
+
+export function filterLabel(id) {
+  return ALL_FILTERS.find((item) => item.id === id)?.label || ''
+}
 
 export function matchesBucket(line, bucket) {
   if (bucket === 'all') return true
   if (bucket === 'special') return Boolean(line.special)
   if (bucket === 'overdue') return isOverdue(line)
   if (bucket === 'late') return isLateIndent(line)
+  if (bucket === 'po-open') return ['open', 'partial'].includes(materialBucket(line))
   return materialBucket(line) === bucket
 }
 
 export function bucketCounts(lines) {
-  const counts = Object.fromEntries(STATUS_FILTERS.map((item) => [item.id, 0]))
+  const counts = Object.fromEntries(ALL_FILTERS.map((item) => [item.id, 0]))
   for (const line of lines) {
-    for (const item of STATUS_FILTERS) if (matchesBucket(line, item.id)) counts[item.id] += 1
+    for (const item of ALL_FILTERS) if (matchesBucket(line, item.id)) counts[item.id] += 1
   }
   return counts
 }

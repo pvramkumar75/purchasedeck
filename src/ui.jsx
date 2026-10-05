@@ -36,6 +36,7 @@ const PATHS = {
   link: 'M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7',
   arrowRight: 'M5 12h14m-6-6 6 6-6 6',
   install: 'M12 3v12m-5-5 5 5 5-5M5 21h14',
+  info: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zm0-14h.01M11 12h1v5h1',
 }
 
 export function Icon({ name, size = 18, className = '', fill = false, strokeWidth = 2 }) {
@@ -272,6 +273,7 @@ export function Chips({ items, value, onChange, label }) {
           key={item.id}
           className={`chip${value === item.id ? ' on' : ''}${item.tone ? ` chip-${item.tone}` : ''}`}
           aria-pressed={value === item.id}
+          title={item.hint}
           onClick={() => onChange(item.id)}
         >
           {item.dot && <i className={`dot tone-${item.dot}`} />}

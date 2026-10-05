@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { TONES, isOverdue, materialBucket, pretty, progressOf, short, statusTone } from './model.js'
-import { Icon, ago, useDismiss } from './ui.jsx'
+import { STATUS_FILTERS, TONES, WATCH_FILTERS, filterLabel, isOverdue, materialBucket, pretty, progressOf, short, statusTone } from './model.js'
+import { Chips, Icon, ago, useDismiss } from './ui.jsx'
 
 function seenKey(scope) {
   return `mattrack-seen-notice-${scope}`
@@ -132,16 +132,16 @@ export function StatusBadge({ line }) {
   const tone = statusTone(line)
   const overdue = isOverdue(line)
   const label = {
-    indent: 'Awaiting PO',
-    late: 'Late indent',
-    waiting: 'Not received',
-    partial: 'Partly received',
-    received: 'Received',
+    indent: 'No PO yet',
+    late: 'No PO · > 7 days',
+    waiting: 'Nothing received',
+    partial: 'Part received',
+    received: 'Fully received',
   }[tone]
   return (
     <span className="badges">
       <span className={`status-badge tone-${tone}`}>{label}</span>
-      {overdue && <span className="status-badge tone-late">Overdue</span>}
+      {overdue && <span className="status-badge tone-late">Past delivery date</span>}
       {line.special && <span className="status-badge tone-special"><Icon name="star" size={11} fill /> Special</span>}
     </span>
   )
@@ -244,11 +244,11 @@ export function ToneKey() {
 // Horizontal stacked bar of how many lines sit in each status; segments are clickable.
 export function StackBar({ lines, onPick, tall }) {
   const parts = [
-    ['indent', 'Awaiting PO', lines.filter((line) => statusTone(line) === 'indent').length],
-    ['late', 'Late indent', lines.filter((line) => statusTone(line) === 'late').length],
-    ['waiting', 'Not received', lines.filter((line) => materialBucket(line) === 'open').length],
-    ['partial', 'Partly received', lines.filter((line) => materialBucket(line) === 'partial').length],
-    ['received', 'Received', lines.filter((line) => materialBucket(line) === 'received').length],
+    ['indent', 'Indent – no PO yet', lines.filter((line) => statusTone(line) === 'indent').length],
+    ['late', 'Indent pending > 7 days', lines.filter((line) => statusTone(line) === 'late').length],
+    ['waiting', 'PO placed – nothing received', lines.filter((line) => materialBucket(line) === 'open').length],
+    ['partial', 'PO placed – part received', lines.filter((line) => materialBucket(line) === 'partial').length],
+    ['received', 'Fully received', lines.filter((line) => materialBucket(line) === 'received').length],
   ]
   const total = lines.length || 1
   return (
@@ -262,6 +262,48 @@ export function StackBar({ lines, onPick, tall }) {
         )
       })}
       {lines.length === 0 && <span className="stack-seg empty" style={{ flexGrow: 1 }} />}
+    </div>
+  )
+}
+
+// Status chips (add up to All) and watch-list chips (overlap), with a plain-words key.
+export function StatusFilters({ value, onChange, counts }) {
+  const [help, setHelp] = useState(false)
+  const withCounts = (items) => items.map((item) => ({ ...item, count: counts[item.id] }))
+  const pick = (id) => onChange(id === value && id !== 'all' ? 'all' : id)
+  const extra = !STATUS_FILTERS.some((item) => item.id === value) && !WATCH_FILTERS.some((item) => item.id === value) && filterLabel(value)
+  return (
+    <div className="filter-groups">
+      <div className="filter-group">
+        <span className="group-label">Status</span>
+        <Chips label="Status" value={value} onChange={pick} items={withCounts(STATUS_FILTERS)} />
+      </div>
+      <div className="filter-group">
+        <span className="group-label">Watch list</span>
+        <Chips label="Watch list" value={value} onChange={pick} items={withCounts(WATCH_FILTERS)} />
+        <button type="button" className="text-btn small help-btn" onClick={() => setHelp((open) => !open)} aria-expanded={help}>
+          <Icon name="info" size={14} /> {help ? 'Hide' : 'What do these mean?'}
+        </button>
+      </div>
+      {extra && (
+        <p className="filter-note">Showing <strong>{extra}</strong>. <button type="button" className="text-btn small" onClick={() => onChange('all')}>Clear</button></p>
+      )}
+      {help && (
+        <div className="filter-help">
+          <p className="muted small"><strong>Status</strong> – every line is in exactly one, so these add up to All.</p>
+          <dl>
+            {STATUS_FILTERS.filter((item) => item.id !== 'all').map((item) => (
+              <div key={item.id}><dt><i className={`dot tone-${item.dot}`} /> {item.label}</dt><dd>{item.hint}</dd></div>
+            ))}
+          </dl>
+          <p className="muted small"><strong>Watch list</strong> – lines that need a push. They also appear under a status above.</p>
+          <dl>
+            {WATCH_FILTERS.map((item) => (
+              <div key={item.id}><dt><i className={`dot tone-${item.dot}`} /> {item.label}</dt><dd>{item.hint}</dd></div>
+            ))}
+          </dl>
+        </div>
+      )}
     </div>
   )
 }
