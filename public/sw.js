@@ -1,4 +1,4 @@
-const CACHE = 'mattrack-v1'
+const CACHE = 'mattrack-v2'
 
 self.addEventListener('install', (event) => {
   self.skipWaiting()
@@ -21,8 +21,10 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          const copy = response.clone()
-          caches.open(CACHE).then((cache) => cache.put(request, copy))
+          if (response.ok) {
+            const copy = response.clone()
+            caches.open(CACHE).then((cache) => cache.put(request, copy))
+          }
           return response
         })
         .catch(() => caches.match(request)),
@@ -33,8 +35,10 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     fetch(request)
       .then((response) => {
-        const copy = response.clone()
-        caches.open(CACHE).then((cache) => cache.put(request, copy))
+        if (response.ok) {
+          const copy = response.clone()
+          caches.open(CACHE).then((cache) => cache.put(request, copy))
+        }
         return response
       })
       .catch(() => caches.match(request)),
