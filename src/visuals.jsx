@@ -151,7 +151,6 @@ export function Timeline({ line }) {
           <small>
             Indent {line.indentNo || '—'}
             {line.indentItem ? ` · Item ${line.indentItem}` : ''}
-            {line.poNumber ? ` · PO ${line.poNumber}` : ''}
           </small>
         </div>
         <time>{pretty(line.dates.indent)}</time>
@@ -161,7 +160,13 @@ export function Timeline({ line }) {
           <span className={stage.done ? 'tl-node' : 'tl-node hollow'} />
           <div>
             <strong>{stage.label}</strong>
-            {stage.current && <small>Current step</small>}
+            {stage.key === 'orderPlaced' && (
+              <small>
+                {line.poNumber ? `PO ${line.poNumber}${line.poItem ? ` / ${line.poItem}` : ''}` : 'PO not yet placed'}
+                {stage.current ? ' · Current step' : ''}
+              </small>
+            )}
+            {stage.current && stage.key !== 'orderPlaced' && <small>Current step</small>}
           </div>
           <time>{pretty(stage.date)}</time>
         </li>
