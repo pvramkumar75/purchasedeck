@@ -1,5 +1,6 @@
 import fs from 'fs'
 import path from 'path'
+import zlib from 'zlib'
 import { fileURLToPath } from 'url'
 import { createDemoStore, normalizeStore } from './logic.js'
 
@@ -46,12 +47,15 @@ function supabaseHeaders(extra = {}) {
 }
 
 async function supabaseFetch(query, options = {}) {
-  const { timeout = 15000, ...rest } = options
+  const { timeout = 20000, ...rest } = options
+  const started = Date.now()
   const response = await fetch(`${supabaseUrl()}/rest/v1/app_store${query}`, {
     ...rest,
     headers: supabaseHeaders(rest.headers),
     signal: AbortSignal.timeout(timeout),
   })
+  const took = Date.now() - started
+  if (took > 3000) console.warn(`Slow Supabase ${rest.method || 'GET'} (${took} ms, ${rest.body ? Math.round(rest.body.length / 1024) : 0} KB sent)`)
   if (!response.ok && response.status !== 409) {
     const body = await response.text().catch(() => '')
     if (/PGRST205|app_store/.test(body) && response.status === 404) {
@@ -64,27 +68,41 @@ async function supabaseFetch(query, options = {}) {
   return response
 }
 
+// Documents are stored gzipped as one string ("gz:<base64>"): several times smaller
+// to send, and Postgres stores a string without having to parse megabytes of JSON.
+// Rows saved before this change are plain JSON and are still read as they are.
+function packDoc(text) {
+  return JSON.stringify(`gz:${zlib.gzipSync(text, { level: 6 }).toString('base64')}`)
+}
+
+function unpackDoc(doc) {
+  if (typeof doc === 'string' && doc.startsWith('gz:')) return zlib.gunzipSync(Buffer.from(doc.slice(3), 'base64')).toString('utf8')
+  return JSON.stringify(doc)
+}
+
 // Each server instance keeps the last copy; an unchanged board costs one tiny query.
 let memo = null
 
 async function readSupabase() {
-  const head = await (await supabaseFetch(`?id=eq.${ROW_ID}&select=version`)).json()
+  const head = await (await supabaseFetch(`?id=eq.${ROW_ID}&select=version`, { timeout: 10000 })).json()
   if (!head.length) return null
   const version = String(head[0].version)
   if (memo?.version === version) return memo
-  const rows = await (await supabaseFetch(`?id=eq.${ROW_ID}&select=doc,version`)).json()
+  const rows = await (await supabaseFetch(`?id=eq.${ROW_ID}&select=doc,version`, { timeout: 30000 })).json()
   if (!rows.length) return null
-  memo = { text: JSON.stringify(rows[0].doc), version: String(rows[0].version) }
+  memo = { text: unpackDoc(rows[0].doc), version: String(rows[0].version) }
   return memo
 }
 
 async function writeSupabase(text, version) {
   const now = new Date().toISOString()
+  const doc = packDoc(text)
   if (!version) {
     const response = await supabaseFetch('', {
       method: 'POST',
       headers: { Prefer: 'return=minimal' },
-      body: `{"id":"${ROW_ID}","version":1,"updated_at":"${now}","doc":${text}}`,
+      body: `{"id":"${ROW_ID}","version":1,"updated_at":"${now}","doc":${doc}}`,
+      timeout: 40000,
     })
     if (response.status === 409) throw new StoreConflict('The store already exists.')
     memo = { text, version: '1' }
@@ -94,7 +112,8 @@ async function writeSupabase(text, version) {
   const response = await supabaseFetch(`?id=eq.${ROW_ID}&version=eq.${Number(version)}&select=version`, {
     method: 'PATCH',
     headers: { Prefer: 'return=representation' },
-    body: `{"version":${next},"updated_at":"${now}","doc":${text}}`,
+    body: `{"version":${next},"updated_at":"${now}","doc":${doc}}`,
+    timeout: 40000,
   })
   const rows = await response.json()
   if (!rows.length) throw new StoreConflict('Someone else saved first.')
@@ -120,8 +139,8 @@ export async function putRecords(id, records) {
     await supabaseFetch('', {
       method: 'POST',
       headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: `{"id":"${recordKey(id)}","version":1,"updated_at":"${new Date().toISOString()}","doc":${text}}`,
-      timeout: 25000,
+      body: `{"id":"${recordKey(id)}","version":1,"updated_at":"${new Date().toISOString()}","doc":${packDoc(text)}}`,
+      timeout: 40000,
     })
     return
   }
@@ -133,10 +152,11 @@ export async function getRecords(ids) {
   const out = {}
   if (!ids.length) return out
   if (kind() === 'supabase') {
-    const rows = await (await supabaseFetch(`?id=${encodeURIComponent(inList(ids))}&select=id,doc`, { timeout: 25000 })).json()
-    for (const row of rows) out[row.id.slice(4)] = row.doc
+    const rows = await (await supabaseFetch(`?id=${encodeURIComponent(inList(ids))}&select=id,doc`, { timeout: 40000 })).json()
+    for (const row of rows) out[row.id.slice(4)] = JSON.parse(unpackDoc(row.doc))
     return out
   }
+
   for (const id of ids) {
     const file = path.join(recordsDir(), `${recordKey(id).slice(4)}.json`)
     if (fs.existsSync(file)) out[id] = JSON.parse(fs.readFileSync(file, 'utf8'))
