@@ -308,7 +308,8 @@ tr.click:hover td { background: #f7fbf8; }
 .drop.on { border-color: var(--green); background: #f3fbf6; }
 .drop p { color: var(--muted); margin: 8px 0 14px; }
 .report-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 12px 0; }
-.uploads { padding-left: 18px; color: var(--muted); }
+.uploads { list-style: none; padding: 0; margin: 0 0 18px; }
+.uploads li { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid #e6e1d8; color: var(--muted); }
 .ms-row { display: grid; grid-template-columns: 1fr 160px auto; gap: 8px; align-items: center; margin: 8px 0; }
 .check { display: flex; gap: 8px; align-items: center; font-weight: 560; }
 .pay-edit { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0; }

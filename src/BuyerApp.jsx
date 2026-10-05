@@ -339,6 +339,35 @@ function Desk({ onUnauthorized }) {
     }
   }
 
+  const removeUploaded = async (upload) => {
+    const label = upload.filename || upload.report
+    const plantName = upload.plant ? plantLabel(upload.plant) : 'this plant'
+    if (!window.confirm(`Remove ${label} for ${plantName}? The plant is rebuilt from the files that remain.`)) return
+    setError('')
+    try {
+      const next = await api.removeUpload(upload.id)
+      replaceAll(next)
+      setNotice(next.rebuilt
+        ? `${next.removed} removed. ${plantLabel(next.plant)} was rebuilt from the files still listed.`
+        : `${next.removed} removed. Earlier files for ${plantLabel(next.plant)} were cleared, so add them again.`)
+    } catch (err) {
+      if (err.status === 401) onUnauthorized()
+      setError(err.message)
+    }
+  }
+
+  const clearUploads = async (plant) => {
+    if (!window.confirm(`Remove every uploaded file for ${plantLabel(plant)}? You can add new files afterwards.`)) return
+    setError('')
+    try {
+      replaceAll(await api.clearUploads(plant))
+      setNotice(`${plantLabel(plant)} files removed. Add the new SAP files.`)
+    } catch (err) {
+      if (err.status === 401) onUnauthorized()
+      setError(err.message)
+    }
+  }
+
   const savePlants = async () => {
     const plantMap = {}
     plants.forEach((row) => {
@@ -528,7 +557,7 @@ function Desk({ onUnauthorized }) {
         {tab === 'upload' && (
           <section className="panel">
             <h2>SAP reports</h2>
-            <p className="lede-copy">Choose the plant first. Every row in the file is stored for that plant. CSV and Excel both work. The first real upload clears the sample lines.</p>
+            <p className="lede-copy">Choose the plant, then add ME5A, ME2L, or MB51. Remove a file when you want to replace it. The plant is rebuilt from the files that remain, and milestone ticks stay.</p>
             <div className="plant-pick" role="group" aria-label="Plant for this upload">
               {PLANTS.map((plant) => (
                 <button
@@ -548,10 +577,10 @@ function Desk({ onUnauthorized }) {
               onDragLeave={() => setDrag(false)}
               onDrop={(event) => { event.preventDefault(); setDrag(false); uploadFiles(event.dataTransfer.files) }}
             >
-              <strong>Drop ME5A, ME2L, or MB51</strong>
+              <strong>Add ME5A, ME2L, or MB51</strong>
               <p>ME5A builds indents. ME2L attaches POs and open quantity. MB51 movement 101 records factory receipt.</p>
               <label className="btn">
-                Choose files
+                Add files
                 <input type="file" accept=".csv,.xlsx,.xls" multiple hidden onChange={(event) => uploadFiles(event.target.files)} />
               </label>
             </div>
@@ -561,11 +590,24 @@ function Desk({ onUnauthorized }) {
               <article><h3>MB51</h3><p>Goods movements. Receipts match the PO and item.</p></article>
             </div>
             <button type="button" className="btn ghost" onClick={loadSamples}>Load the three sample reports</button>
-            <h3>Recent uploads</h3>
+            <div className="section-head">
+              <h3>Uploaded files</h3>
+              {uploadPlant && (
+                <button type="button" className="text-btn" onClick={() => clearUploads(uploadPlant)}>
+                  Remove all {plantLabel(uploadPlant)} files
+                </button>
+              )}
+            </div>
             <ul className="uploads">
-              {(data?.uploads || []).length === 0 && <li>No SAP file uploaded yet. The board is showing sample lines.</li>}
+              {(data?.uploads || []).length === 0 && <li>No SAP file uploaded yet.</li>}
               {(data?.uploads || []).map((upload) => (
-                <li key={upload.at}>{upload.report} · {upload.rows} rows{upload.plant ? ` · ${plantLabel(upload.plant)}` : ''} · {pretty(upload.at)}</li>
+                <li key={upload.id || upload.at}>
+                  <span>
+                    {upload.filename || upload.report} · {upload.report} · {upload.rows} rows
+                    {upload.plant ? ` · ${plantLabel(upload.plant)}` : ''} · {pretty(upload.at)}
+                  </span>
+                  <button type="button" className="text-btn" onClick={() => removeUploaded(upload)}>Remove</button>
+                </li>
               ))}
             </ul>
             <h3>Plant to unit</h3>

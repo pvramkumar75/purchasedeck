@@ -9,6 +9,8 @@ import {
   PLANTS,
   applyEditor,
   applyRecords,
+  clearPlantUploads,
+  removeUpload,
   asId,
   companiesForPlant,
   decorate,
@@ -38,7 +40,7 @@ function payload(viewer = { buyer: true }) {
   }
   if (viewer.buyer) {
     body.plantMap = store.plantMap
-    body.uploads = store.uploads
+    body.uploads = store.uploads.map(({ records, ...upload }) => upload)
     body.passwords = store.plantPasswords
     body.plants = PLANTS
     body.companies = COMPANIES
@@ -192,7 +194,7 @@ app.post('/api/upload', buyer, async (req, res) => {
       })
       return
     }
-    const rows = applyRecords(store, parsed.report, parsed.records, plant)
+    const rows = applyRecords(store, parsed.report, parsed.records, plant, { filename: req.body?.filename || '' })
     await writeStore(store)
     res.json({ report: parsed.report, rows, filename: req.body?.filename || '', ...payload() })
   } catch (error) {
@@ -235,6 +237,7 @@ app.post('/api/lines', buyer, async (req, res) => {
     manualVendorName: String(body.vendorName || '').trim(),
     remark: '',
     sample: false,
+    manual: true,
     requisitioner: String(body.requisitioner || '').trim(),
     requisitionDate: new Date().toISOString().slice(0, 10),
     createdAt: new Date().toISOString(),
@@ -287,6 +290,31 @@ app.post('/api/save', buyer, async (req, res) => {
     console.error(error)
     res.status(500).json({ error: 'The purchase desk could not save that change.' })
   }
+})
+
+app.post('/api/upload-remove', buyer, async (req, res) => {
+  const removed = removeUpload(store, String(req.body?.id || ''))
+  if (!removed) {
+    res.status(404).json({ error: 'That upload is no longer in the list.' })
+    return
+  }
+  await writeStore(store)
+  res.json({
+    ...payload(),
+    removed: removed.report,
+    plant: removed.plant,
+    rebuilt: Boolean(removed.rebuilt),
+  })
+})
+
+app.post('/api/upload-clear', buyer, async (req, res) => {
+  const plant = req.body?.plant
+  if (!clearPlantUploads(store, plant)) {
+    res.status(400).json({ error: 'Choose the plant whose files should be removed.' })
+    return
+  }
+  await writeStore(store)
+  res.json(payload())
 })
 
 app.post('/api/remove', buyer, async (req, res) => {

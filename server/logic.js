@@ -1,3 +1,4 @@
+import crypto from 'crypto'
 import * as xlsx from 'xlsx'
 
 export const PLANTS = [
@@ -281,7 +282,7 @@ function fill(line, fields) {
   line.updatedAt = new Date().toISOString()
 }
 
-export function applyRecords(store, report, records, company) {
+export function applyRecords(store, report, records, company, options = {}) {
   const tag = (line) => {
     if (company && COMPANIES.includes(company)) line.companyOverride = company
     return line
@@ -366,9 +367,71 @@ export function applyRecords(store, report, records, company) {
       count += 1
     }
   }
-  store.uploads.unshift({ report, rows: count, plant: company || '', at: new Date().toISOString() })
-  store.uploads = store.uploads.slice(0, 12)
+  if (options.log !== false) {
+    store.uploads.unshift({
+      id: crypto.randomBytes(8).toString('hex'),
+      report,
+      rows: count,
+      plant: company || '',
+      filename: options.filename || '',
+      at: new Date().toISOString(),
+      records,
+    })
+    store.uploads = store.uploads.slice(0, 30)
+  }
   return count
+}
+
+function keptEdits(line) {
+  return {
+    override: line.override || {},
+    remark: line.remark || '',
+    manualPoNumber: line.manualPoNumber || '',
+    manualVendorName: line.manualVendorName || '',
+  }
+}
+
+function rebuildPlant(store, plant) {
+  const edits = new Map()
+  for (const line of store.lines) {
+    if (!line.manual && line.companyOverride === plant) edits.set(line.id, keptEdits(line))
+  }
+  store.lines = store.lines.filter((line) => line.manual || line.companyOverride !== plant)
+  const files = store.uploads
+    .filter((upload) => upload.plant === plant && Array.isArray(upload.records))
+    .sort((a, b) => String(a.at).localeCompare(String(b.at)))
+  for (const file of files) applyRecords(store, file.report, file.records, plant, { log: false })
+  for (const line of store.lines) {
+    const saved = edits.get(line.id)
+    if (!saved) continue
+    line.override = saved.override
+    if (saved.remark) line.remark = saved.remark
+    if (saved.manualPoNumber) line.manualPoNumber = saved.manualPoNumber
+    if (saved.manualVendorName) line.manualVendorName = saved.manualVendorName
+  }
+}
+
+export function removeUpload(store, uploadId) {
+  const upload = store.uploads.find((item) => item.id === uploadId)
+  if (!upload) return null
+  const plant = upload.plant
+  const hadRows = Array.isArray(upload.records)
+  if (hadRows) {
+    store.uploads = store.uploads.filter((item) => item.id !== uploadId)
+  } else if (plant) {
+    store.uploads = store.uploads.filter((item) => item.plant !== plant || (item.id !== uploadId && Array.isArray(item.records)))
+  } else {
+    store.uploads = store.uploads.filter((item) => item.id !== uploadId)
+  }
+  if (plant && COMPANIES.includes(plant)) rebuildPlant(store, plant)
+  return { ...upload, records: undefined, rebuilt: hadRows }
+}
+
+export function clearPlantUploads(store, plant) {
+  if (!COMPANIES.includes(plant)) return false
+  store.uploads = store.uploads.filter((item) => item.plant !== plant)
+  rebuildPlant(store, plant)
+  return true
 }
 
 export function receivedQty(line) {
@@ -475,6 +538,7 @@ export function decorate(line, plantMap, vendorNames = {}) {
     },
     remark: line.remark || '',
     sample: Boolean(line.sample),
+    manual: Boolean(line.manual),
     updatedAt: line.updatedAt,
     editor: {
       company,
@@ -581,6 +645,7 @@ export function lineFromView(view) {
     companyOverride: COMPANIES.includes(view.company) ? view.company : '',
     override,
     receipts,
+    manual: Boolean(view.manual),
     sample: false,
     createdAt: view.updatedAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -591,6 +656,9 @@ export function normalizeStore(store) {
   store.lines ||= []
   store.vendorNames ||= {}
   store.uploads ||= []
+  store.uploads.forEach((upload) => {
+    if (!upload.id) upload.id = crypto.randomBytes(8).toString('hex')
+  })
   store.sessions ||= []
   store.plantSessions ||= {}
   store.plantPasswords ||= {}
