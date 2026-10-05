@@ -444,7 +444,7 @@ function Overview({ lines, notices, onFilter, onOpen }) {
 
       <div className="grid-2">
         <section className="card">
-          <div className="card-head"><h2>Needs attention</h2><span className="muted small">Special, past delivery date, pending > 7 days</span></div>
+          <div className="card-head"><h2>Needs attention</h2><span className="muted small">Special, past delivery date, pending {'>'} 7 days</span></div>
           {attention.length === 0 ? <p className="muted pad">Nothing urgent. Well done.</p> : (
             <div className="attention">
               {attention.map((line) => (
