@@ -3,6 +3,7 @@ import { api, getToken, setToken } from './api.js'
 import { readSapFile } from './readSap.js'
 import {
   PLANTS,
+  VARIANT,
   SORTS,
   STEPS,
   bucketCounts,
@@ -324,7 +325,7 @@ function Editor({ line, onSaved, onClose, onDirty, onRemoved }) {
 
 // ---------- add line ----------
 
-const BLANK_LINE = { company: 'TPL', indentNo: '', indentItem: '10', material: '', shortText: '', quantity: '', unit: '', vendorName: '', plant: '' }
+const BLANK_LINE = { company: PLANTS[0].id, indentNo: '', indentItem: '10', material: '', shortText: '', quantity: '', unit: '', vendorName: '', plant: '' }
 
 function AddLine({ onClose, onCreated }) {
   const [form, setForm] = useState(BLANK_LINE)
@@ -909,7 +910,7 @@ function SettingsTab({ data, replaceAll, onUnauthorized }) {
             ))}
           </div>
           <div className="row-actions">
-            <button type="button" className="btn ghost small" onClick={() => setPlants((current) => [...current, { plant: '', company: 'TPL' }])}><Icon name="plus" size={14} /> Add plant</button>
+            <button type="button" className="btn ghost small" onClick={() => setPlants((current) => [...current, { plant: '', company: PLANTS[0].id }])}><Icon name="plus" size={14} /> Add plant</button>
             <button type="button" className="btn small" onClick={savePlants} disabled={!mapDirty || busy === 'map'}>Save mapping</button>
           </div>
         </section>
@@ -1246,7 +1247,7 @@ function Desk({ onUnauthorized }) {
 
 export default function BuyerApp() {
   const [authed, setAuthed] = useState(Boolean(getToken()))
-  useEffect(() => { document.title = 'Purchase desk · Material Tracking' }, [])
+  useEffect(() => { document.title = `Purchase desk · ${VARIANT.name}` }, [])
   if (!authed) return <Login onDone={() => setAuthed(true)} />
   return <Desk onUnauthorized={() => setAuthed(false)} />
 }

@@ -1,13 +1,10 @@
 import crypto from 'crypto'
 import * as xlsx from 'xlsx'
+import { variantFor } from '../shared/variant.js'
 import { RECEIPT_MOVES, REVERSAL_MOVES, asId, asItem, parseWorkbook as parseBytes, text, toISO } from '../shared/parse.js'
 
-export const PLANTS = [
-  { id: 'TPL', label: 'TPL' },
-  { id: 'TCL-JDM', label: 'TCL-JDM' },
-  { id: 'TCL-JDCL', label: 'TCL-JDCL' },
-  { id: 'TCL', label: 'TCL (JDM+JDCL)' },
-]
+export const VARIANT = variantFor(process.env.APP_VARIANT)
+export const PLANTS = VARIANT.plants
 export const COMPANIES = PLANTS.map((plant) => plant.id)
 export const STEP_KEYS = ['orderPlaced', 'ready', 'transit', 'hyderabad', 'receipt', 'unloaded']
 // Passwords that shipped in earlier public builds. Still accepted if a store holds them,
@@ -32,15 +29,11 @@ export function hashToken(token) {
 }
 
 export function companiesForPlant(plantId) {
-  if (plantId === 'TCL') return ['TCL-JDM', 'TCL-JDCL', 'TCL']
+  if (plantId === 'TCL') return COMPANIES.filter((id) => id.startsWith('TCL'))
   return [plantId]
 }
 
-const DEFAULT_PLANTS = {
-  '1100': 'TPL',
-  '1200': 'TCL-JDM',
-  '1300': 'TCL-JDCL',
-}
+const DEFAULT_PLANTS = VARIANT.defaultPlants
 
 export { asId, asItem, decodeText, norm, num, parseMatrix, toISO } from '../shared/parse.js'
 
@@ -696,7 +689,7 @@ export function createDemoStore() {
     expectedArrivalDone: true,
     expectedArrivalDate: '2026-09-30',
   }
-  return normalizeStore({
+  const demo = {
     plantMap: { ...DEFAULT_PLANTS },
     vendorNames: {
       '300441': 'Lakshmi Metals',
@@ -940,5 +933,7 @@ export function createDemoStore() {
         override: { ...done, paymentStatus: 'paid', paymentDate: '2026-10-01' },
       }),
     ],
-  })
+  }
+  demo.lines = demo.lines.filter((line) => COMPANIES.includes(line.companyOverride))
+  return normalizeStore(demo)
 }

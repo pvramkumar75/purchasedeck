@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import BuyerApp from './BuyerApp.jsx'
 import UserApp from './UserApp.jsx'
-import { PLANTS } from './model.js'
+import { PLANTS, VARIANT } from './model.js'
 import { FeedbackProvider, Icon, Logo, ThemeToggle } from './ui.jsx'
 
 function Landing() {
@@ -10,7 +10,7 @@ function Landing() {
       <div className="auth-top"><ThemeToggle /></div>
       <div className="auth-card landing">
         <Logo size={52} />
-        <h1>Material Tracking</h1>
+        <h1>{VARIANT.name}</h1>
         <p className="muted">Follow indents from purchase request to factory receipt. Purchase shares a separate link for each plant.</p>
         <div className="landing-plants">
           {PLANTS.map((plant) => (

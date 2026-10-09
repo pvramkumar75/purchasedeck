@@ -2,12 +2,14 @@ import fs from 'fs'
 import path from 'path'
 import zlib from 'zlib'
 import { fileURLToPath } from 'url'
-import { createDemoStore, normalizeStore } from './logic.js'
+import { VARIANT, createDemoStore, normalizeStore } from './logic.js'
 
 const dataDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data')
-const storePath = process.env.STORE_FILE || (process.env.VERCEL ? '/tmp/material-tracking-store.json' : path.join(dataDir, 'store.json'))
-const BLOB_NAME = 'material-tracking/store.json'
-const ROW_ID = 'main'
+const storePath = process.env.STORE_FILE || (process.env.VERCEL ? `/tmp/material-tracking-store${SUFFIX}.json` : path.join(dataDir, `store${SUFFIX}.json`))
+// Each app keeps its own board, so two apps can share one database without meeting.
+const SUFFIX = VARIANT.id === 'ALL' ? '' : `-${VARIANT.id.toLowerCase()}`
+const BLOB_NAME = `material-tracking${SUFFIX}/store.json`
+const ROW_ID = `main${SUFFIX}`
 const ATTEMPTS = 10
 // Stay well inside Vercel's 30 second function limit.
 const DEADLINE_MS = 20000
@@ -84,10 +86,12 @@ function unpackDoc(doc) {
 let memo = null
 
 async function readSupabase() {
-  const head = await (await supabaseFetch(`?id=eq.${ROW_ID}&select=version`, { timeout: 10000 })).json()
-  if (!head.length) return null
-  const version = String(head[0].version)
-  if (memo?.version === version) return memo
+  // Without a copy to compare against, asking for the version first only adds a round trip.
+  if (memo) {
+    const head = await (await supabaseFetch(`?id=eq.${ROW_ID}&select=version`, { timeout: 10000 })).json()
+    if (!head.length) return null
+    if (memo.version === String(head[0].version)) return memo
+  }
   const rows = await (await supabaseFetch(`?id=eq.${ROW_ID}&select=doc,version`, { timeout: 30000 })).json()
   if (!rows.length) return null
   memo = { text: unpackDoc(rows[0].doc), version: String(rows[0].version) }
@@ -126,7 +130,7 @@ async function writeSupabase(text, version) {
 // or files (local) means everyday saves only rewrite the small board document.
 
 const recordsDir = () => path.join(path.dirname(storePath), 'records')
-const recordKey = (id) => `rec:${String(id).replace(/[^a-z0-9]/gi, '')}`
+const recordKey = (id) => `rec${SUFFIX}:${String(id).replace(/[^a-z0-9]/gi, '')}`
 const inList = (ids) => `in.(${ids.map((id) => `"${recordKey(id)}"`).join(',')})`
 
 export function keepsRecordsApart() {
@@ -145,7 +149,7 @@ export async function putRecords(id, records) {
     return
   }
   fs.mkdirSync(recordsDir(), { recursive: true })
-  fs.writeFileSync(path.join(recordsDir(), `${recordKey(id).slice(4)}.json`), text)
+  fs.writeFileSync(path.join(recordsDir(), `${recordKey(id).slice(recordKey(id).indexOf(':') + 1)}.json`), text)
 }
 
 export async function getRecords(ids) {
@@ -153,12 +157,12 @@ export async function getRecords(ids) {
   if (!ids.length) return out
   if (kind() === 'supabase') {
     const rows = await (await supabaseFetch(`?id=${encodeURIComponent(inList(ids))}&select=id,doc`, { timeout: 40000 })).json()
-    for (const row of rows) out[row.id.slice(4)] = JSON.parse(unpackDoc(row.doc))
+    for (const row of rows) out[row.id.slice(row.id.indexOf(':') + 1)] = JSON.parse(unpackDoc(row.doc))
     return out
   }
 
   for (const id of ids) {
-    const file = path.join(recordsDir(), `${recordKey(id).slice(4)}.json`)
+    const file = path.join(recordsDir(), `${recordKey(id).slice(recordKey(id).indexOf(':') + 1)}.json`)
     if (fs.existsSync(file)) out[id] = JSON.parse(fs.readFileSync(file, 'utf8'))
   }
   return out
@@ -171,7 +175,7 @@ export async function dropRecords(ids) {
       await supabaseFetch(`?id=${encodeURIComponent(inList(ids))}`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } })
       return
     }
-    for (const id of ids) fs.rmSync(path.join(recordsDir(), `${recordKey(id).slice(4)}.json`), { force: true })
+    for (const id of ids) fs.rmSync(path.join(recordsDir(), `${recordKey(id).slice(recordKey(id).indexOf(':') + 1)}.json`), { force: true })
   } catch (error) {
     // Leftover rows only take space; the board no longer points at them.
     console.error('Old file rows could not be removed.', error)

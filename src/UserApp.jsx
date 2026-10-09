@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, getPlantToken, setPlantToken } from './api.js'
 import {
   COMPANIES,
+  VARIANT,
   PERIODS,
   SORTS,
   STEPS,
@@ -265,7 +266,7 @@ export default function UserApp({ go, lineId, plantId }) {
 
   useEffect(() => {
     const selected = data?.lines.find((line) => line.id === lineId)
-    document.title = selected ? `${selected.shortText} · ${plantLabel(plantId)}` : `${plantLabel(plantId)} · Material Tracking`
+    document.title = selected ? `${selected.shortText} · ${plantLabel(plantId)}` : `${plantLabel(plantId)} · ${VARIANT.name}`
     if (lineId) window.scrollTo(0, 0)
   }, [lineId, data, plantId])
 

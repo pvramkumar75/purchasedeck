@@ -1,9 +1,7 @@
-export const PLANTS = [
-  { id: 'TPL', label: 'TPL' },
-  { id: 'TCL-JDM', label: 'TCL-JDM' },
-  { id: 'TCL-JDCL', label: 'TCL-JDCL' },
-  { id: 'TCL', label: 'TCL (JDM+JDCL)' },
-]
+import { variantFor } from '../shared/variant.js'
+
+export const VARIANT = variantFor(typeof __APP_VARIANT__ === 'undefined' ? '' : __APP_VARIANT__)
+export const PLANTS = VARIANT.plants
 export const COMPANIES = PLANTS.map((plant) => plant.id)
 
 export const STEPS = [
@@ -20,7 +18,7 @@ export function plantLabel(id) {
 }
 
 export function companiesForPlant(plantId) {
-  if (plantId === 'TCL') return ['TCL-JDM', 'TCL-JDCL', 'TCL']
+  if (plantId === 'TCL') return COMPANIES.filter((id) => id.startsWith('TCL'))
   return [plantId]
 }
 
